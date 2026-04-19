@@ -1,0 +1,90 @@
+# P0 来源配置
+# 格式参考 src/ingestion/source_registry.py SourceConfig
+
+sources:
+  # ── S 级：一手来源 ──
+  - name: "Andrej Karpathy Blog"
+    source_type: blog
+    url: "https://karpathy.bearblog.dev"
+    credibility_level: S
+    fetch_strategy: rss
+    config:
+      rss_url: "https://karpathy.bearblog.dev/feed.xml"
+
+  - name: "Jim Fan Public Posts"
+    source_type: blog
+    url: "https://x.com/DrJimFan"
+    credibility_level: S
+    fetch_strategy: manual
+
+  # ── A 级：高质量二次整理 ──
+  - name: "Dwarkesh Podcast"
+    source_type: podcast_transcript
+    url: "https://www.dwarkeshpatel.com"
+    credibility_level: A
+    fetch_strategy: manual
+    config:
+      podcast_name: "Dwarkesh Podcast"
+
+  - name: "a16z Podcast"
+    source_type: podcast_transcript
+    url: "https://a16z.com/podcasts"
+    credibility_level: A
+    fetch_strategy: manual
+    config:
+      podcast_name: "a16z Podcast"
+
+  - name: "Ethan Mollick Blog"
+    source_type: blog
+    url: "https://www.oneusefulthing.org"
+    credibility_level: A
+    fetch_strategy: rss
+    config:
+      rss_url: "https://www.oneusefulthing.org/feed"
+
+  - name: "20VC"
+    source_type: interview
+    url: "https://www.20vc.com"
+    credibility_level: A
+    fetch_strategy: manual
+
+  - name: "The Robot Brains Podcast"
+    source_type: podcast_transcript
+    url: "https://www.therobotbrains.ai"
+    credibility_level: A
+    fetch_strategy: manual
+    config:
+      podcast_name: "The Robot Brains Podcast"
+
+  # ── B 级：一般性报道 ──
+  - name: "All-In Podcast"
+    source_type: podcast_transcript
+    url: "https://www.allinpodcast.co"
+    credibility_level: B
+    fetch_strategy: manual
+    config:
+      podcast_name: "All-In Podcast"
+
+  - name: "TechCrunch Equity Podcast"
+    source_type: podcast_transcript
+    url: "https://techcrunch.com/category/podcasts/equity"
+    credibility_level: B
+    fetch_strategy: manual
+    config:
+      podcast_name: "TechCrunch Equity Podcast"
+
+  - name: "Interplay VC Podcast"
+    source_type: podcast_transcript
+    url: "https://www.interplay.vc/podcast"
+    credibility_level: B
+    fetch_strategy: manual
+    config:
+      podcast_name: "Interplay VC Podcast"
+
+  - name: "TBPN"
+    source_type: podcast_transcript
+    url: "https://tbpn.xyz"
+    credibility_level: B
+    fetch_strategy: manual
+    config:
+      podcast_name: "TBPN"
