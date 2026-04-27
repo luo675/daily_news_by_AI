@@ -1,5 +1,21 @@
 # 最小上下文摘要
 
+## 0. Latest Web Storage Status
+
+This section overrides older notes that described Ask history and AI provider config as JSON-only.
+
+- Ask history is now DB-first with JSON fallback.
+- AI provider config is now DB-first with JSON fallback.
+- Old `configs/web/qa_history.json` is still tolerated as fallback, but is not auto-imported into DB.
+- Old `configs/web/ai_settings.json` is still tolerated as fallback, but is not auto-imported into DB.
+- `Source.config["_web"]` is still intentionally retained and is not part of the current migration target.
+- Main knowledge storage boundaries are unchanged.
+
+See:
+
+- `docs/web_local_storage_boundary.md`
+- `docs/ask_result_display_optimization.md`
+
 ## 1. 项目结构（精简版）
 
 ### 根目录
@@ -754,9 +770,12 @@
   - `DatabaseReviewService.create_batch(...)` 原子性
 
 当前明确残留问题：
-- `DailyBrief.uncertainties` 的自动源当前是 `list[str]`，因此 `uncertainty_status` 没有天然自动值。
-- 当前 Web 页面中的 `uncertainty_status` `<select>` 只有 `open / watching / resolved` 三个选项，没有空状态选项；当当前有效值为 `None` 时，如果用户只修改 `uncertainty_note`，浏览器可能会把 `open` 作为默认值提交，导致产生非预期的人工覆盖。
-- 这个问题尚未修复；后续新会话如果继续沿网页产品主线推进，优先级应高于继续扩展新的 review 目标类型。
+- `DailyBrief.uncertainties` 的自动源当前仍是 `list[str]`，因此 `uncertainty_status` 没有天然自动值。
+- 之前 Review 页面在 `uncertainty_status=None` 时会因为浏览器默认行为隐式提交 `open`；这个问题已经修复：
+  - 页面现在使用显式占位值，未选择状态时不会写入人工覆盖
+  - 只有用户显式选择 `open / watching / resolved` 时才会写入 `review_edits.uncertainty_status`
+  - 已补 service 层与 route 层回归测试，覆盖占位值保留与“只改 note 不误写 status”两段链路
+- 因此当前网页产品主线不再需要把这个问题作为最高优先级；后续应转向 Ask 结果展示优化与已有能力收口。
 
 ### 已完成阶段 J：Ask reviewed evidence 优先消费
 
@@ -823,7 +842,9 @@
   - 读取时通过 `get_effective_value(...)` 覆盖显示
   - 支持 `reset to auto`
   - 单次批量提交保持原子性
-- AI provider 当前仍为本地 JSON 存储，Ask history 也为本地 JSON 存储；这在当前 MVP 中是有意保留的最小实现，不应被误判为需要立即 DB 化的缺陷
+- Ask history 当前已是 `DB-first + JSON fallback`
+- AI provider config 当前已是 `DB-first + JSON fallback`
+- 两者都保留旧 JSON 兼容兜底，但不会自动把旧 JSON 导入 DB
 - `Source.config["_web"]` 当前承担 Web 维护元数据承载职责；这在当前 MVP 中可接受，不应为了字段“更漂亮”而立即重构 domain/schema
 - Ask 当前已在现有 `local retrieval first + bounded evidence + optional external reasoning` 边界内优先消费 reviewed `opportunities / risks / uncertainties`
 
@@ -873,7 +894,7 @@
 下个会话不应再从“搭工作流”起手，也不应直接写代码；当前最合理的起点有两条，取决于会话目标：
 
 - 如果继续沿当前内容维护主线推进：基于最新试跑与评审结论，准备下一轮 observation-oriented maintenance
-- 如果继续沿当前网页产品主线推进：不要再回到信息架构空谈；Review 的最小结构化审核能力与 Ask reviewed evidence 优先消费都已落地。当前最合理的下一步不是继续扩新的审核目标，而是先修复 `uncertainty_status` 的页面默认提交语义问题，再决定是继续完善 Ask 结果呈现，还是进入周边本地存储收口
+- 如果继续沿当前网页产品主线推进：不要再回到信息架构空谈；Review 的最小结构化审核能力、Ask reviewed evidence 优先消费、Ask history DB-first 收口、AI provider config DB-first 收口都已落地。当前最合理的下一步应是基于 `docs/ask_result_display_optimization.md` 推进 Ask 结果展示优化，而不是继续做新的周边存储迁移。
 
 推荐起手顺序：
 1. 先确认当前是走“内容维护主线”还是“网页版 MVP 规划主线”
@@ -884,12 +905,11 @@
 3. 如果走网页版 MVP 主线：
    - 先把当前状态视为 `Web MVP baseline stable`
    - 不要重新讨论页面清单、Sources/AI Settings/Ask 的大方向设计
-   - 先修复 `uncertainty_status` 在无自动值场景下的表单默认提交问题：
-     - 当当前值为 `None` 时，页面需要空状态选项，且默认不应隐式提交 `open`
-     - 只有用户显式选择 `open / watching / resolved` 时才应写入人工覆盖
-   - 在这个问题修复后，再决定下一步优先级：
-     - 继续完善 Ask 对 reviewed 结果的展示与消费
-     - 或进入“最小本地存储改造方案”的 Phase 1：Ask history JSON -> local DB
+   - 当前 `uncertainty_status` 默认提交语义问题已修复，不要重复开工
+   - 当前 Ask history 与 AI provider config 都已完成 `DB-first + JSON fallback` 收口，不要再把它们当成未完成主线
+   - 下一步优先级应为：
+     - 基于 `docs/ask_result_display_optimization.md` 完善 Ask 结果展示
+     - 或回到内容维护主线继续 baseline maintenance
 4. 无论走哪条主线，都不要擅自扩展抓取器能力或重构稳定主链路
 
 ### 给下个会话的明确提示词
@@ -899,11 +919,24 @@
 > 先阅读 `ARCH_CONTEXT.md`、`docs/application_url_batch_workflow.md`、`scripts/real_seed_sources/BASELINE_SEED_STATUS.md`、`scripts/real_seed_sources/SEED_MAINTENANCE_NOTE.md`。  
 > 当前项目已经明确两条主线：内容维护主线，以及网页版 MVP 主线。  
 > 如果当前目标是内容维护：不要重新讨论 CLI/API 最小入口、URL 导入器、seed 目录结构或环境验证闭环；继续围绕 baseline maintenance 与 `what-openai-did` 的 observation-oriented maintenance 推进。  
-> 如果当前目标是网页产品主线：当前应把项目理解为“Web MVP baseline stable + Review 结构化审核已扩到 opportunities/risks/uncertainties + Ask 已开始优先消费 reviewed evidence”，不要再回到信息架构空谈，也不要重开 Sources / AI Settings / Ask 的大方向设计；优先修复 `uncertainty_status` 在无自动值场景下的页面默认提交问题，然后再决定是继续完善 Ask 结果展示，还是进入 Ask history 本地存储收口。  
+> 如果当前目标是网页产品主线：当前应把项目理解为“Web MVP baseline stable + Review 结构化审核已扩到 opportunities/risks/uncertainties + Ask 已开始优先消费 reviewed evidence + Ask history / AI provider config 已完成 DB-first 收口”。不要再回到信息架构空谈，也不要重开 Sources / AI Settings / Ask 的大方向设计；优先基于 `docs/ask_result_display_optimization.md` 推进 Ask 结果展示优化，而不是重复做存储收口或重开 `uncertainty_status` 修复。  
 > 无论哪条主线，除非暴露明确回归，否则都不要修改 `orchestrator`、`persistence`、`processing`、`domain`、CLI/API 主路径，也不要扩展抓取器能力。
 ### 最小本地存储改造方案（不动主知识存储）
 
-这个方向可以作为当前 `Web MVP baseline stable` 之后的一个小型架构改良主题，但它的性质是“补充型本地存储收口”，不是“替换主知识存储”。后续会话如果接这个方向，应先固定边界：
+这个方向在当前阶段已经完成前两步，可作为历史记录保留；后续不要把它重新当作下一步默认主线。它的性质一直是“补充型本地存储收口”，不是“替换主知识存储”。
+
+已完成：
+
+1. Phase 1：Ask history JSON -> local DB
+2. Phase 2：AI provider config JSON -> local DB
+
+两者当前都采用：
+
+- `DB-first`
+- `JSON fallback`
+- old JSON tolerated but not auto-imported
+
+后续会话如果继续接这个方向，应先固定边界：
 - 不动 `src/application/orchestrator.py`
 - 不动 `src/application/persistence.py`
 - 不动 `src/domain/*`
@@ -931,7 +964,7 @@
   - 当前还没有正式抽象边界
   - 后续如需要支持 HTML snapshot / PDF / image / raw asset，可单独定义最小 local asset storage 边界
 
-推荐的最小本地存储改造顺序：
+历史上的推荐顺序与当前状态：
 
 1. Phase 1：Ask history JSON -> local DB
 - 目标：把 Ask history 从零散文件收口到更稳定的本地持久化
@@ -950,6 +983,8 @@
   - 更明确的本地审计
   - 更容易做 Ask 页面历史展示和回归验证
 
+当前状态：已完成并已通过测试、migration 与页面链路验证。
+
 2. Phase 2：AI provider config JSON -> local DB
 - 目标：把 provider 配置从本地 JSON 收口到本地配置存储
 - 仍保持：
@@ -962,6 +997,8 @@
   - Ask flow
   - 外部 AI 调用策略
 - API key 在当前阶段仍可接受“本地存储 + 基本 UI 遮罩/不回显明文”的处理，不要把它升级成复杂 secrets-management 项目
+
+当前状态：已完成并已通过测试、migration 与页面链路验证。
 
 3. Phase 3：定义最小 local asset storage 边界（可先只写 design note）
 - 目标：为后续可能引入的原文快照、PDF、图片、原始 HTML、原始资产保留做边界准备
@@ -980,16 +1017,15 @@
 - 不要为了存储“更漂亮”而动 `orchestrator` / `persistence` / `domain`
 - 不要现在强行把 `Source.config["_web"]` 升级为正式 schema 列
 
-如果后续会话要执行这个方向，最合理的顺序是：
-1. 先确认这是“周边本地存储收口”，不是主存储替换
-2. 先做 Ask history 收口
-3. 再做 AI provider config 收口
-4. 最后才判断是否需要为 raw assets / snapshots 单独设计 local asset storage
+如果后续会话要继续这个方向，最合理的理解是：
+1. Phase 1 与 Phase 2 已完成，不要重复开工
+2. 当前没有必须立即启动的 Phase 3
+3. 只有在明确要支持 raw assets / snapshots 时，才单独定义最小 local asset storage 边界
 
 给下一个接手 AI 的执行提示：
 > 当前“本地存储改造”只针对 Web 周边本地存储，不针对核心知识存储。  
-> 第一优先级是 `configs/web/qa_history.json` 的 JSON -> local DB 收口。  
-> 第二优先级才是 `configs/web/ai_settings.json` 的 JSON -> local DB 收口。  
+> `configs/web/qa_history.json` 与 `configs/web/ai_settings.json` 的 DB-first 收口都已完成，不要重复把它们当作下一步主线。  
 > `Source.config["_web"]` 当前继续保留，不是优先改造目标。  
 > 不要把这个任务扩成“替换主存储模式”或“引入新的主知识引擎”。  
-> 如未来要支持 HTML snapshot / PDF / image / raw asset，再单独定义最小 local asset storage 边界。
+> 如未来要支持 HTML snapshot / PDF / image / raw asset，再单独定义最小 local asset storage 边界。  
+> 如果继续沿网页产品主线推进，优先阅读 `docs/ask_result_display_optimization.md`，从 Ask 页面结果展示优化起手。

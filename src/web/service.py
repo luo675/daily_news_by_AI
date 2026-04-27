@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 from urllib import request
 
-from sqlalchemy import Text, cast, func, or_, select
+from sqlalchemy import Text, cast, desc, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from src.admin.review_schemas import ReviewEditCreate
@@ -41,6 +41,8 @@ from src.domain.models import (
     WatchlistItem,
 )
 from src.ingestion.url_importer import import_url_as_raw_document
+from src.web.provider_store import AiProviderConfigRecord
+from src.web.qa_history_store import AskHistoryRecord
 
 WEB_CONFIG_DIR = Path("configs/web")
 AI_SETTINGS_PATH = WEB_CONFIG_DIR / "ai_settings.json"
@@ -77,6 +79,8 @@ _RISK_REVIEW_FIELDS = ("severity", "description")
 _RISK_SEVERITY_VALUES = ("high", "medium", "low")
 _UNCERTAINTY_REVIEW_FIELDS = ("uncertainty_note", "uncertainty_status")
 _UNCERTAINTY_STATUS_VALUES = ("open", "watching", "resolved")
+_UNCHANGED_UNCERTAINTY_STATUS = "__UNCHANGED__"
+_NO_UNCERTAINTY_STATUS_CHANGE = object()
 
 
 @dataclass(slots=True)
@@ -723,6 +727,8 @@ class WebMvpService:
                     form,
                     override_source=override_sources[field_name],
                 )
+                if new_value is _NO_UNCERTAINTY_STATUS_CHANGE:
+                    continue
                 if new_value == current_values[field_name]:
                     continue
                 edits.append(
@@ -847,25 +853,13 @@ class WebMvpService:
             session.close()
 
     def list_ai_providers(self) -> list[ProviderConfig]:
-        records = self._read_json_records(AI_SETTINGS_PATH)
+        records = self._list_ai_provider_records_from_db()
+        if not records:
+            records = self._read_json_records(AI_SETTINGS_PATH)
         providers: list[ProviderConfig] = []
         for record in records:
             providers.append(
-                ProviderConfig(
-                    id=record["id"],
-                    name=record["name"],
-                    provider_type=record.get("provider_type", "openai_compatible"),
-                    base_url=record.get("base_url", "https://api.openai.com/v1"),
-                    model=record.get("model", ""),
-                    api_key=record.get("api_key", ""),
-                    is_enabled=bool(record.get("is_enabled", True)),
-                    is_default=bool(record.get("is_default", False)),
-                    supported_tasks=self._normalize_supported_tasks(record.get("supported_tasks")),
-                    notes=record.get("notes", ""),
-                    last_test_status=record.get("last_test_status"),
-                    last_test_message=record.get("last_test_message"),
-                    updated_at=record.get("updated_at", ""),
-                )
+                self._build_provider_config_from_record(record)
             )
         return providers
 
@@ -876,6 +870,19 @@ class WebMvpService:
         return None
 
     def save_ai_provider(self, form: dict[str, str]) -> str:
+        session = self._try_create_db_session()
+        if session is not None:
+            try:
+                return self._save_ai_provider_to_db(session, form)
+            except ValueError as exc:
+                return str(exc)
+            except Exception:
+                try:
+                    session.rollback()
+                except Exception:
+                    pass
+            finally:
+                session.close()
         try:
             providers = self._read_json_records(AI_SETTINGS_PATH)
             provider_id = form.get("provider_id") or str(uuid.uuid4())
@@ -924,6 +931,21 @@ class WebMvpService:
             return str(exc)
 
     def test_ai_provider(self, provider_id: str) -> str:
+        session = self._try_create_db_session()
+        if session is not None:
+            try:
+                db_message = self._test_ai_provider_in_db(session, provider_id)
+                if db_message != "AI provider not found.":
+                    return db_message
+            except ValueError as exc:
+                return str(exc)
+            except Exception:
+                try:
+                    session.rollback()
+                except Exception:
+                    pass
+            finally:
+                session.close()
         providers = self._read_json_records(AI_SETTINGS_PATH)
         target_index = next((index for index, provider in enumerate(providers) if provider.get("id") == provider_id), None)
         if target_index is None:
@@ -1013,13 +1035,14 @@ class WebMvpService:
             "evidence": evidence,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
-        history = self._read_json_records(QA_HISTORY_PATH)
-        history.insert(0, record)
-        self._write_json_records(QA_HISTORY_PATH, history[:50])
+        self._persist_qa_history_record(record)
         return record
 
     def list_qa_history(self) -> list[dict[str, Any]]:
-        return self._read_json_records(QA_HISTORY_PATH)
+        db_records = self._list_qa_history_from_db(limit=50)
+        if not db_records:
+            return self._read_json_records(QA_HISTORY_PATH)[:50]
+        return db_records[:50]
 
     def get_dashboard_data(self) -> dict[str, Any]:
         counts = {
@@ -2011,6 +2034,8 @@ class WebMvpService:
         if reset_requested or (value == "" and override_source == "manual"):
             return RESET_TO_AUTO_SENTINEL
         if field_name == "uncertainty_status":
+            if value == _UNCHANGED_UNCERTAINTY_STATUS:
+                return _NO_UNCERTAINTY_STATUS_CHANGE
             if value == "":
                 return None
             if value not in _UNCERTAINTY_STATUS_VALUES:
@@ -2151,6 +2176,190 @@ class WebMvpService:
             temp_file.write(payload)
             temp_name = temp_file.name
         os.replace(temp_name, path)
+
+    def _persist_qa_history_record(self, record: dict[str, Any]) -> None:
+        session = self._try_create_db_session()
+        if session is None:
+            self._append_qa_history_json_fallback(record)
+            return
+        try:
+            session.add(self._build_qa_history_db_record(record))
+            session.commit()
+        except Exception:
+            try:
+                session.rollback()
+            except Exception:
+                pass
+            self._append_qa_history_json_fallback(record)
+        finally:
+            session.close()
+
+    def _append_qa_history_json_fallback(self, record: dict[str, Any]) -> None:
+        history = self._read_json_records(QA_HISTORY_PATH)
+        history.insert(0, record)
+        self._write_json_records(QA_HISTORY_PATH, history[:50])
+
+    def _build_qa_history_db_record(self, record: dict[str, Any]) -> AskHistoryRecord:
+        created_at = self._parse_datetime(record.get("created_at")) or datetime.now(timezone.utc)
+        return AskHistoryRecord(
+            id=uuid.UUID(str(record["id"])),
+            question=str(record.get("question") or ""),
+            answer=str(record.get("answer") or ""),
+            answer_mode=str(record.get("answer_mode") or "local_only"),
+            provider_name=str(record["provider_name"]) if record.get("provider_name") is not None else None,
+            evidence=list(record.get("evidence") or []),
+            error=str(record["error"]) if record.get("error") is not None else None,
+            note=str(record["note"]) if record.get("note") is not None else None,
+            created_at=created_at,
+        )
+
+    def _list_qa_history_from_db(self, *, limit: int) -> list[dict[str, Any]]:
+        session = self._try_create_db_session()
+        if session is None:
+            return []
+        try:
+            rows = list(
+                session.scalars(
+                    select(AskHistoryRecord).order_by(desc(AskHistoryRecord.created_at)).limit(limit)
+                )
+            )
+            return [self._serialize_qa_history_db_record(row) for row in rows]
+        except Exception:
+            return []
+        finally:
+            session.close()
+
+    def _serialize_qa_history_db_record(self, row: AskHistoryRecord) -> dict[str, Any]:
+        return {
+            "id": str(row.id),
+            "question": row.question,
+            "answer": row.answer,
+            "answer_mode": row.answer_mode,
+            "provider_name": row.provider_name,
+            "evidence": list(row.evidence or []),
+            "error": row.error,
+            "note": row.note,
+            "created_at": row.created_at.isoformat(),
+        }
+
+    def _parse_datetime(self, raw_value: Any) -> datetime | None:
+        value = str(raw_value or "").strip()
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            return None
+
+    def _build_provider_config_from_record(self, record: Any) -> ProviderConfig:
+        updated_at = record.updated_at if hasattr(record, "updated_at") else record.get("updated_at", "")
+        updated_at_value = updated_at.isoformat() if isinstance(updated_at, datetime) else str(updated_at or "")
+        return ProviderConfig(
+            id=str(record.id if hasattr(record, "id") else record["id"]),
+            name=str(record.name if hasattr(record, "name") else record["name"]),
+            provider_type=str(
+                record.provider_type if hasattr(record, "provider_type") else record.get("provider_type", "openai_compatible")
+            ),
+            base_url=str(record.base_url if hasattr(record, "base_url") else record.get("base_url", "https://api.openai.com/v1")),
+            model=str(record.model if hasattr(record, "model") else record.get("model", "")),
+            api_key=str(record.api_key if hasattr(record, "api_key") else record.get("api_key", "")),
+            is_enabled=bool(record.is_enabled if hasattr(record, "is_enabled") else record.get("is_enabled", True)),
+            is_default=bool(record.is_default if hasattr(record, "is_default") else record.get("is_default", False)),
+            supported_tasks=self._normalize_supported_tasks(
+                record.supported_tasks if hasattr(record, "supported_tasks") else record.get("supported_tasks")
+            ),
+            notes=str(record.notes if hasattr(record, "notes") else record.get("notes", "")),
+            last_test_status=record.last_test_status if hasattr(record, "last_test_status") else record.get("last_test_status"),
+            last_test_message=record.last_test_message if hasattr(record, "last_test_message") else record.get("last_test_message"),
+            updated_at=updated_at_value,
+        )
+
+    def _list_ai_provider_records_from_db(self) -> list[AiProviderConfigRecord]:
+        session = self._try_create_db_session()
+        if session is None:
+            return []
+        try:
+            return list(session.scalars(select(AiProviderConfigRecord).order_by(desc(AiProviderConfigRecord.updated_at))))
+        except Exception:
+            return []
+        finally:
+            session.close()
+
+    def _save_ai_provider_to_db(self, session: Session, form: dict[str, str]) -> str:
+        provider_id = form.get("provider_id") or str(uuid.uuid4())
+        is_default = form.get("is_default") == "on"
+        provider_type = self._validate_provider_type(form.get("provider_type", "openai_compatible"))
+        supported_tasks = self._extract_supported_tasks(form)
+        existing_record = session.get(AiProviderConfigRecord, provider_id)
+        submitted_api_key = form.get("api_key", "").strip()
+        effective_api_key = submitted_api_key or (str(existing_record.api_key).strip() if existing_record else "")
+        provider_rows = list(session.scalars(select(AiProviderConfigRecord)))
+        if is_default:
+            for provider in provider_rows:
+                if provider.id != provider_id:
+                    provider.is_default = False
+        record = existing_record or AiProviderConfigRecord(id=provider_id)
+        if existing_record is None and not any(provider.is_default for provider in provider_rows):
+            is_default = True
+        record.name = form["name"].strip()
+        record.provider_type = provider_type
+        record.base_url = form.get("base_url", "https://api.openai.com/v1").strip() or "https://api.openai.com/v1"
+        record.model = form.get("model", "").strip()
+        record.api_key = effective_api_key
+        record.is_enabled = form.get("is_enabled") == "on"
+        record.is_default = is_default
+        record.supported_tasks = supported_tasks
+        record.notes = form.get("notes", "").strip()
+        record.last_test_status = "valid" if form.get("model", "").strip() and effective_api_key else "incomplete"
+        record.last_test_message = "Configuration saved locally." if form.get("model", "").strip() else "Model is empty."
+        record.updated_at = datetime.now(timezone.utc)
+        session.add(record)
+        session.commit()
+        return "AI provider saved."
+
+    def _test_ai_provider_in_db(self, session: Session, provider_id: str) -> str:
+        provider = session.get(AiProviderConfigRecord, provider_id)
+        if provider is None:
+            return "AI provider not found."
+        provider_type = self._validate_provider_type(provider.provider_type)
+        base_url = str(provider.base_url or "").strip()
+        api_key = str(provider.api_key or "").strip()
+        model = str(provider.model or "").strip()
+        if not base_url or not api_key or not model:
+            provider.last_test_status = "incomplete"
+            provider.last_test_message = "Base URL, API key, and model are required for testing."
+            provider.updated_at = datetime.now(timezone.utc)
+            session.add(provider)
+            session.commit()
+            return "Provider test recorded as incomplete."
+
+        status = "failed"
+        message = "Unknown provider test failure."
+        try:
+            if provider_type == "openai_compatible":
+                endpoint = base_url.rstrip("/") + "/models"
+                req = request.Request(
+                    endpoint,
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    method="GET",
+                )
+                with request.urlopen(req, timeout=20) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+                data = payload.get("data", [])
+                if isinstance(data, list):
+                    status = "valid"
+                    message = f"Connected successfully. Model configured: {model}."
+                else:
+                    message = "Provider responded without a valid model list."
+        except Exception as exc:
+            message = f"{type(exc).__name__}: {exc}"
+
+        provider.last_test_status = status
+        provider.last_test_message = message
+        provider.updated_at = datetime.now(timezone.utc)
+        session.add(provider)
+        session.commit()
+        return f"Provider test status: {status}."
 
     def _run_db_read(self, operation, *, empty):
         session = self._try_create_db_session()

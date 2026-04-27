@@ -457,15 +457,17 @@ async def review_page(message: str | None = None) -> HTMLResponse:
             f"<li>{escape(edit.field_name)} -> {escape(str(edit.new_value))} <span class='muted'>{escape(str(edit.created_at))}</span></li>"
             for edit in item.history
         ) or "<li>No review history.</li>"
-        uncertainty_status_options = "".join(
-            [
-                f"<option value=''{' selected' if item.effective_values.get('uncertainty_status') is None else ''}>(auto)</option>"
-            ]
-            + [
-            f"<option value='{escape(value)}'{' selected' if item.effective_values.get('uncertainty_status') == value else ''}>{escape(value)}</option>"
-            for value in ("open", "watching", "resolved")
-            ]
-        )
+        current_uncertainty_status = item.effective_values.get("uncertainty_status")
+        uncertainty_status_options = []
+        if current_uncertainty_status is None:
+            uncertainty_status_options.append(
+                '<option value="__UNCHANGED__" selected>-- keep auto / no manual override --</option>'
+            )
+        for value in ("open", "watching", "resolved"):
+            selected = " selected" if current_uncertainty_status == value else ""
+            uncertainty_status_options.append(
+                f'<option value="{escape(value)}"{selected}>{escape(value)}</option>'
+            )
         uncertainty_sections.append(
             f"""
             <section class="card">
@@ -484,7 +486,7 @@ uncertainty_status={escape(str(item.auto_values.get("uncertainty_status") or "")
                   <form method="post" action="/web/review/uncertainties/{item.brief.id}/{item.route_id}">
                     <textarea name="uncertainty_note" placeholder="uncertainty_note">{escape(str(item.effective_values.get("uncertainty_note") or ""))}</textarea>
                     <label><input type="checkbox" name="reset_uncertainty_note"> reset to auto</label>
-                    <select name="uncertainty_status">{uncertainty_status_options}</select>
+                    <select name="uncertainty_status">{"".join(uncertainty_status_options)}</select>
                     <label><input type="checkbox" name="reset_uncertainty_status"> reset to auto</label>
                     <input name="reason" placeholder="Why are you editing this uncertainty?">
                     <button>Save Uncertainty Review</button>

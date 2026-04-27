@@ -1072,6 +1072,65 @@ def test_save_uncertainty_review_note_only_does_not_create_status_override(
     assert [edit.field_name for edit in edits] == ["uncertainty_note"]
 
 
+def test_save_uncertainty_review_placeholder_status_does_not_create_status_override(
+    monkeypatch,
+    workspace_tmp_path: Path,
+) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    service = WebMvpService()
+    brief = _build_brief_with_uncertainties()
+    write_session = _FakeWriteSession(brief=brief)
+    captured: dict[str, object] = {}
+    route_id = str(
+        service._build_daily_brief_uncertainty_target_id(
+            brief.id,
+            f"{service._build_daily_brief_uncertainty_item_id(brief.uncertainties[0])}:0",
+        )
+    )
+
+    monkeypatch.setattr(service, "_require_session", lambda: write_session)
+
+    class FakeDatabaseReviewService:
+        def __init__(self, session):
+            self.session = session
+
+        def get_effective_value(self, target_type, target_id, field_name, auto_value=None):
+            current = {
+                "uncertainty_note": "Provider lock-in remains unclear.",
+                "uncertainty_status": None,
+            }
+            return current[field_name]
+
+        def get_override_status(self, target_type, target_id, field_name):
+            return OverrideStatus(
+                field_name=field_name,
+                source="auto",
+                last_manual_value=None,
+                last_manual_at=None,
+                current_auto_value=None,
+            )
+
+        def create_batch(self, target_type, target_id, batch, reason=None):
+            captured["batch"] = batch
+            return batch
+
+    monkeypatch.setattr("src.web.service.DatabaseReviewService", FakeDatabaseReviewService)
+
+    message = service.save_uncertainty_review(
+        str(brief.id),
+        route_id,
+        {
+            "uncertainty_note": "Adjusted uncertainty note.",
+            "uncertainty_status": "__UNCHANGED__",
+            "reason": "Uncertainty note only",
+        },
+    )
+
+    assert message == "Uncertainty review saved."
+    edits = captured["batch"]
+    assert [edit.field_name for edit in edits] == ["uncertainty_note"]
+
+
 def test_save_uncertainty_review_reset_to_auto(monkeypatch, workspace_tmp_path: Path) -> None:
     _configure_web_storage(monkeypatch, workspace_tmp_path)
     service = WebMvpService()
@@ -1175,7 +1234,8 @@ def test_review_page_renders_uncertainty_review_card(monkeypatch, workspace_tmp_
     assert response.status_code == 200
     assert "Uncertainty Review" in response.text
     assert "Provider lock-in remains unclear." in response.text
-    assert "<option value='' selected>(auto)</option>" in response.text
+    assert '<option value="__UNCHANGED__" selected>-- keep auto / no manual override --</option>' in response.text
+    assert '<option value="open" selected>' not in response.text
     assert "name=\"reset_uncertainty_note\"" in response.text
     assert "name=\"reset_uncertainty_status\"" in response.text
     assert f"action=\"/web/review/uncertainties/{brief.id}/{target_id}\"" in response.text
@@ -1213,6 +1273,77 @@ def test_review_page_submit_uncertainty_includes_reset_flags(monkeypatch, worksp
     assert captured["route_id"] == route_id
     assert captured["form"]["reset_uncertainty_note"] == "on"
     assert captured["form"]["reset_uncertainty_status"] == "on"
+
+
+def test_review_page_submit_uncertainty_placeholder_preserves_form_and_skips_status_edit(
+    monkeypatch,
+    workspace_tmp_path: Path,
+) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    service = WebMvpService()
+    brief = _build_brief_with_uncertainties()
+    write_session = _FakeWriteSession(brief=brief)
+    captured: dict[str, object] = {}
+    route_id = str(
+        service._build_daily_brief_uncertainty_target_id(
+            brief.id,
+            f"{service._build_daily_brief_uncertainty_item_id(brief.uncertainties[0])}:0",
+        )
+    )
+
+    monkeypatch.setattr(service, "_require_session", lambda: write_session)
+
+    class FakeDatabaseReviewService:
+        def __init__(self, session):
+            self.session = session
+
+        def get_effective_value(self, target_type, target_id, field_name, auto_value=None):
+            current = {
+                "uncertainty_note": "Provider lock-in remains unclear.",
+                "uncertainty_status": None,
+            }
+            return current[field_name]
+
+        def get_override_status(self, target_type, target_id, field_name):
+            return OverrideStatus(
+                field_name=field_name,
+                source="auto",
+                last_manual_value=None,
+                last_manual_at=None,
+                current_auto_value=None,
+            )
+
+        def create_batch(self, target_type, target_id, batch, reason=None):
+            captured["batch"] = batch
+            return batch
+
+    def _save(brief_id_arg: str, route_id_arg: str, form: dict[str, str]) -> str:
+        captured["brief_id"] = brief_id_arg
+        captured["route_id"] = route_id_arg
+        captured["form"] = form
+        return service.save_uncertainty_review(brief_id_arg, route_id_arg, form)
+
+    monkeypatch.setattr("src.web.service.DatabaseReviewService", FakeDatabaseReviewService)
+    monkeypatch.setattr(web_routes.service, "save_uncertainty_review", _save)
+
+    client = TestClient(create_app())
+    response = client.post(
+        f"/web/review/uncertainties/{brief.id}/{route_id}",
+        data={
+            "uncertainty_note": "Adjusted uncertainty note.",
+            "uncertainty_status": "__UNCHANGED__",
+            "reason": "Uncertainty note only",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert captured["brief_id"] == str(brief.id)
+    assert captured["route_id"] == route_id
+    assert captured["form"]["uncertainty_note"] == "Adjusted uncertainty note."
+    assert captured["form"]["uncertainty_status"] == "__UNCHANGED__"
+    edits = captured["batch"]
+    assert [edit.field_name for edit in edits] == ["uncertainty_note"]
 
 
 def test_database_review_service_create_batch_is_atomic_for_uncertainty() -> None:

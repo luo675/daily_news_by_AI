@@ -111,6 +111,98 @@ class _DummySession:
         return None
 
 
+class _FakeQaHistoryScalarResult:
+    def __init__(self, items):
+        self._items = items
+
+    def __iter__(self):
+        return iter(self._items)
+
+
+class _FakeQaHistorySession:
+    def __init__(self, existing=None):
+        self.existing = existing or []
+        self.pending = []
+        self.persisted = []
+        self.closed = False
+        self.commit_count = 0
+        self.rollback_count = 0
+
+    def add(self, item) -> None:
+        self.pending.append(item)
+
+    def commit(self) -> None:
+        self.commit_count += 1
+        self.persisted.extend(self.pending)
+        self.pending = []
+
+    def rollback(self) -> None:
+        self.rollback_count += 1
+        self.pending = []
+
+    def scalars(self, stmt):
+        return _FakeQaHistoryScalarResult(self.existing)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _FakeQaHistoryCommitFailureSession(_FakeQaHistorySession):
+    def commit(self) -> None:
+        self.commit_count += 1
+        raise RuntimeError("db commit failed")
+
+
+class _FakeProviderScalarResult:
+    def __init__(self, items):
+        self._items = items
+
+    def __iter__(self):
+        return iter(self._items)
+
+
+class _FakeProviderSession:
+    def __init__(self, existing=None):
+        self.existing = list(existing or [])
+        self.pending = []
+        self.closed = False
+        self.commit_count = 0
+        self.rollback_count = 0
+
+    def add(self, item) -> None:
+        self.pending.append(item)
+
+    def get(self, model, object_id):
+        object_id = str(object_id)
+        for item in self.existing:
+            if str(item.id) == object_id:
+                return item
+        return None
+
+    def commit(self) -> None:
+        self.commit_count += 1
+        for item in self.pending:
+            replaced = False
+            for index, existing in enumerate(self.existing):
+                if str(existing.id) == str(item.id):
+                    self.existing[index] = item
+                    replaced = True
+                    break
+            if not replaced:
+                self.existing.append(item)
+        self.pending = []
+
+    def rollback(self) -> None:
+        self.rollback_count += 1
+        self.pending = []
+
+    def scalars(self, stmt):
+        return _FakeProviderScalarResult(self.existing)
+
+    def close(self) -> None:
+        self.closed = True
+
+
 def test_ask_page_renders_history_and_local_evidence_note(monkeypatch, workspace_tmp_path: Path) -> None:
     _configure_web_storage(monkeypatch, workspace_tmp_path)
     monkeypatch.setattr(web_routes.service, "list_ai_providers", lambda: [_build_provider()])
@@ -197,6 +289,136 @@ def test_ask_question_returns_insufficient_local_evidence_without_external_call(
     assert result["note"] == "No local evidence matched the question."
     assert called["external"] is False
     assert len(result["evidence"]) == 0
+
+
+def test_ask_question_persists_history_to_db_first(monkeypatch, workspace_tmp_path: Path) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    service = WebMvpService()
+    session = _FakeQaHistorySession()
+
+    monkeypatch.setattr(service, "_try_create_db_session", lambda: session)
+    monkeypatch.setattr(service, "list_ai_providers", lambda: [])
+    monkeypatch.setattr(service, "search_documents_for_question", lambda question: ([], None))
+    monkeypatch.setattr(service, "search_briefs_for_question", lambda question: ([], None), raising=False)
+    monkeypatch.setattr(
+        service,
+        "_write_json_records",
+        lambda path, records: (_ for _ in ()).throw(AssertionError("JSON fallback should not run when DB write works")),
+    )
+
+    result = service.ask_question("What changed in AI coding tools this week?")
+
+    assert result["answer_mode"] == "insufficient_local_evidence"
+    assert session.commit_count == 1
+    assert len(session.persisted) == 1
+    saved = session.persisted[0]
+    assert saved.question == "What changed in AI coding tools this week?"
+    assert saved.answer == result["answer"]
+    assert saved.answer_mode == "insufficient_local_evidence"
+    assert saved.provider_name is None
+    assert saved.error is None
+    assert saved.note == "No local evidence matched the question."
+    assert saved.evidence == []
+
+
+def test_ask_question_falls_back_to_json_when_db_commit_fails(
+    monkeypatch,
+    workspace_tmp_path: Path,
+) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    service = WebMvpService()
+    session = _FakeQaHistoryCommitFailureSession()
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(service, "_try_create_db_session", lambda: session)
+    monkeypatch.setattr(service, "list_ai_providers", lambda: [])
+    monkeypatch.setattr(service, "search_documents_for_question", lambda question: ([], None))
+    monkeypatch.setattr(service, "search_briefs_for_question", lambda question: ([], None), raising=False)
+    monkeypatch.setattr(service, "_read_json_records", lambda path: [])
+
+    def _capture_write(path, records):
+        captured["path"] = path
+        captured["records"] = records
+
+    monkeypatch.setattr(service, "_write_json_records", _capture_write)
+
+    result = service.ask_question("What changed in AI coding tools this week?")
+
+    assert result["answer_mode"] == "insufficient_local_evidence"
+    assert result["note"] == "No local evidence matched the question."
+    assert session.commit_count == 1
+    assert session.rollback_count == 1
+    assert session.closed is True
+    assert captured["path"] == web_service_module.QA_HISTORY_PATH
+    written = captured["records"]
+    assert len(written) == 1
+    assert written[0]["question"] == "What changed in AI coding tools this week?"
+    assert written[0]["answer"] == result["answer"]
+    assert written[0]["answer_mode"] == "insufficient_local_evidence"
+
+
+def test_list_qa_history_reads_from_db(monkeypatch, workspace_tmp_path: Path) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    service = WebMvpService()
+    created_at = datetime(2026, 4, 27, 12, 0, tzinfo=timezone.utc)
+    row = type(
+        "AskHistoryRow",
+        (),
+        {
+            "id": uuid.uuid4(),
+            "question": "What changed in AI coding tools this week?",
+            "answer": "Stored DB answer.",
+            "answer_mode": "local_only",
+            "provider_name": None,
+            "evidence": [{"title": "DB evidence"}],
+            "error": None,
+            "note": "Stored DB note.",
+            "created_at": created_at,
+        },
+    )()
+
+    monkeypatch.setattr(service, "_try_create_db_session", lambda: _FakeQaHistorySession(existing=[row]))
+    monkeypatch.setattr(
+        service,
+        "_read_json_records",
+        lambda path: (_ for _ in ()).throw(AssertionError("JSON fallback should not run when DB read works")),
+    )
+
+    history = service.list_qa_history()
+
+    assert len(history) == 1
+    assert history[0]["question"] == "What changed in AI coding tools this week?"
+    assert history[0]["answer"] == "Stored DB answer."
+    assert history[0]["note"] == "Stored DB note."
+    assert history[0]["created_at"] == created_at.isoformat()
+
+
+def test_list_qa_history_falls_back_to_legacy_json_when_db_unavailable(
+    monkeypatch,
+    workspace_tmp_path: Path,
+) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    service = WebMvpService()
+    legacy = [
+        {
+            "id": "legacy-1",
+            "question": "Legacy JSON question",
+            "answer": "Legacy JSON answer",
+            "answer_mode": "local_only",
+            "provider_name": None,
+            "evidence": [],
+            "error": None,
+            "note": "Legacy note",
+            "created_at": "2026-04-26T08:07:31.977231+00:00",
+        }
+    ]
+
+    monkeypatch.setattr(service, "_try_create_db_session", lambda: None)
+    monkeypatch.setattr(service, "_read_json_records", lambda path: legacy)
+
+    history = service.list_qa_history()
+
+    assert history == legacy
 
 
 def test_ask_question_prefers_key_points_and_uses_external_reasoning(
@@ -476,6 +698,38 @@ def test_ask_submit_renders_brief_evidence_without_document_link(monkeypatch, wo
     assert "Reviewed risk and uncertainty evidence." in response.text
 
 
+def test_ask_page_reads_history_from_db(monkeypatch, workspace_tmp_path: Path) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    created_at = datetime(2026, 4, 27, 12, 0, tzinfo=timezone.utc)
+    row = type(
+        "AskHistoryRow",
+        (),
+        {
+            "id": uuid.uuid4(),
+            "question": "What changed in AI coding tools this week?",
+            "answer": "Stored DB answer.",
+            "answer_mode": "local_only",
+            "provider_name": None,
+            "evidence": [],
+            "error": None,
+            "note": "Stored DB note.",
+            "created_at": created_at,
+        },
+    )()
+
+    monkeypatch.setattr(web_routes.service, "_try_create_db_session", lambda: _FakeQaHistorySession(existing=[row]))
+    monkeypatch.setattr(web_routes.service, "_read_json_records", lambda path: [])
+    monkeypatch.setattr(web_routes.service, "list_ai_providers", lambda: [])
+
+    client = TestClient(create_app())
+    response = client.get("/web/ask")
+
+    assert response.status_code == 200
+    assert "What changed in AI coding tools this week?" in response.text
+    assert "Stored DB answer." in response.text
+    assert "Stored DB note." in response.text
+
+
 def test_ai_provider_edit_page_hides_plaintext_key(monkeypatch, workspace_tmp_path: Path) -> None:
     _configure_web_storage(monkeypatch, workspace_tmp_path)
     provider = _build_provider()
@@ -488,6 +742,78 @@ def test_ai_provider_edit_page_hides_plaintext_key(monkeypatch, workspace_tmp_pa
     assert 'value="secret-key"' not in response.text
     assert "Leave blank to keep current saved key" in response.text
     assert provider.masked_key in response.text
+
+
+def test_list_ai_providers_reads_from_db(monkeypatch, workspace_tmp_path: Path) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    service = WebMvpService()
+    row = type(
+        "ProviderRow",
+        (),
+        {
+            "id": "provider-1",
+            "name": "DB Provider",
+            "provider_type": "openai_compatible",
+            "base_url": "https://example.com",
+            "model": "test-model",
+            "api_key": "secret-key",
+            "is_enabled": True,
+            "is_default": True,
+            "supported_tasks": ["qa"],
+            "notes": "db notes",
+            "last_test_status": "valid",
+            "last_test_message": "ok",
+            "updated_at": datetime(2026, 4, 27, 12, 0, tzinfo=timezone.utc),
+        },
+    )()
+
+    monkeypatch.setattr(service, "_try_create_db_session", lambda: _FakeProviderSession(existing=[row]))
+    monkeypatch.setattr(
+        service,
+        "_read_json_records",
+        lambda path: (_ for _ in ()).throw(AssertionError("JSON fallback should not run when DB read works")),
+    )
+
+    providers = service.list_ai_providers()
+
+    assert len(providers) == 1
+    assert providers[0].name == "DB Provider"
+    assert providers[0].api_key == "secret-key"
+    assert providers[0].notes == "db notes"
+
+
+def test_list_ai_providers_falls_back_to_legacy_json_when_db_unavailable(
+    monkeypatch,
+    workspace_tmp_path: Path,
+) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    service = WebMvpService()
+    legacy = [
+        {
+            "id": "provider-1",
+            "name": "Legacy Provider",
+            "provider_type": "openai_compatible",
+            "base_url": "https://example.com",
+            "model": "legacy-model",
+            "api_key": "legacy-secret",
+            "is_enabled": True,
+            "is_default": True,
+            "supported_tasks": ["qa"],
+            "notes": "legacy notes",
+            "last_test_status": "valid",
+            "last_test_message": "ok",
+            "updated_at": "2026-04-26T00:00:00+00:00",
+        }
+    ]
+
+    monkeypatch.setattr(service, "_try_create_db_session", lambda: None)
+    monkeypatch.setattr(service, "_read_json_records", lambda path: legacy)
+
+    providers = service.list_ai_providers()
+
+    assert len(providers) == 1
+    assert providers[0].name == "Legacy Provider"
+    assert providers[0].api_key == "legacy-secret"
 
 
 def test_save_ai_provider_preserves_existing_key_when_edit_input_blank(
@@ -513,6 +839,7 @@ def test_save_ai_provider_preserves_existing_key_when_edit_input_blank(
     }
     captured: dict[str, object] = {}
 
+    monkeypatch.setattr(service, "_try_create_db_session", lambda: None)
     monkeypatch.setattr(service, "_read_json_records", lambda path: [existing.copy()])
 
     def _capture_write(path, records):
@@ -539,3 +866,115 @@ def test_save_ai_provider_preserves_existing_key_when_edit_input_blank(
     saved = captured["records"][0]
     assert saved["api_key"] == "persisted-secret"
     assert saved["last_test_status"] == "valid"
+
+
+def test_save_ai_provider_writes_to_db_and_preserves_existing_key_when_edit_input_blank(
+    monkeypatch,
+    workspace_tmp_path: Path,
+) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    service = WebMvpService()
+    existing = type(
+        "ProviderRow",
+        (),
+        {
+            "id": "provider-1",
+            "name": "Existing Provider",
+            "provider_type": "openai_compatible",
+            "base_url": "https://example.com",
+            "model": "test-model",
+            "api_key": "persisted-secret",
+            "is_enabled": True,
+            "is_default": True,
+            "supported_tasks": ["qa"],
+            "notes": "existing",
+            "last_test_status": "valid",
+            "last_test_message": "ok",
+            "updated_at": datetime(2026, 4, 26, 0, 0, tzinfo=timezone.utc),
+        },
+    )()
+    session = _FakeProviderSession(existing=[existing])
+
+    monkeypatch.setattr(service, "_try_create_db_session", lambda: session)
+    monkeypatch.setattr(
+        service,
+        "_write_json_records",
+        lambda path, records: (_ for _ in ()).throw(AssertionError("JSON fallback should not run when DB write works")),
+    )
+
+    message = service.save_ai_provider(
+        {
+            "provider_id": "provider-1",
+            "name": "Existing Provider Updated",
+            "provider_type": "openai_compatible",
+            "base_url": "https://example.com",
+            "model": "test-model",
+            "api_key": "",
+            "notes": "changed",
+            "is_enabled": "on",
+            "is_default": "on",
+            "task_qa": "on",
+        }
+    )
+
+    assert message == "AI provider saved."
+    assert session.commit_count == 1
+    saved = session.get(None, "provider-1")
+    assert saved.name == "Existing Provider Updated"
+    assert saved.api_key == "persisted-secret"
+    assert saved.notes == "changed"
+
+
+def test_test_ai_provider_updates_db_status(monkeypatch, workspace_tmp_path: Path) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    service = WebMvpService()
+    existing = type(
+        "ProviderRow",
+        (),
+        {
+            "id": "provider-1",
+            "name": "Existing Provider",
+            "provider_type": "openai_compatible",
+            "base_url": "https://example.com",
+            "model": "test-model",
+            "api_key": "persisted-secret",
+            "is_enabled": True,
+            "is_default": True,
+            "supported_tasks": ["qa"],
+            "notes": "existing",
+            "last_test_status": "incomplete",
+            "last_test_message": "missing",
+            "updated_at": datetime(2026, 4, 26, 0, 0, tzinfo=timezone.utc),
+        },
+    )()
+    session = _FakeProviderSession(existing=[existing])
+
+    class _FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+        def read(self):
+            return b'{\"data\": []}'
+
+    monkeypatch.setattr(service, "_try_create_db_session", lambda: session)
+    monkeypatch.setattr(
+        web_service_module.request,
+        "urlopen",
+        lambda req, timeout=20: _FakeResponse(),
+    )
+    monkeypatch.setattr(
+        service,
+        "_write_json_records",
+        lambda path, records: (_ for _ in ()).throw(AssertionError("JSON fallback should not run when DB write works")),
+    )
+
+    message = service.test_ai_provider("provider-1")
+
+    assert message == "Provider test status: valid."
+    assert session.commit_count == 1
+    saved = session.get(None, "provider-1")
+    assert saved.last_test_status == "valid"
+    assert "Connected successfully" in saved.last_test_message

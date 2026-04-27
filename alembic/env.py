@@ -10,6 +10,8 @@ from sqlalchemy import engine_from_config, pool
 
 from src.config import DatabaseConfig
 from src.domain.base import Base
+from src.web.qa_history_store import AskHistoryRecord, WebBase
+from src.web.provider_store import AiProviderConfigRecord
 
 # 导入所有模型，确保 Base.metadata 包含所有表定义
 from src.domain.models import (  # noqa: F401
@@ -37,7 +39,7 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # 设置 target_metadata 供 autogenerate 使用
-target_metadata = Base.metadata
+target_metadata = [Base.metadata, WebBase.metadata]
 
 # 从 DatabaseConfig 获取同步连接字符串
 db_config = DatabaseConfig()
