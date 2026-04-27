@@ -31,6 +31,8 @@ from src.admin.review_schemas import (
 )
 from src.domain.models import ReviewEdit
 
+RESET_TO_AUTO_SENTINEL = "__review_reset_to_auto__"
+
 
 class InvalidReviewError(Exception):
     """修订校验错误"""
@@ -66,60 +68,11 @@ class DatabaseReviewService:
         Raises:
             InvalidReviewError: target_type 不合法或 field_name 不允许
         """
-        # 校验 target_type
-        try:
-            tt = ReviewTargetType(target_type)
-        except ValueError:
-            valid = sorted(t.value for t in ReviewTargetType)
-            raise InvalidReviewError(
-                f"无效的 target_type: {target_type!r}，合法值: {valid}"
-            )
-
-        # 校验 field_name 是否允许用于该 target_type
-        allowed = ALLOWED_FIELD_NAMES.get(tt, [])
-        allowed_values = [fn.value for fn in allowed]
-        if create.field_name not in allowed_values:
-            raise InvalidReviewError(
-                f"target_type={target_type!r} 不允许修订字段 {create.field_name!r}，"
-                f"允许的字段: {allowed_values}"
-            )
-
-        # 获取旧值（如果未提供，则从最近一次修订中获取）
-        old_value = create.old_value
-        if old_value is None:
-            latest = self._get_latest_edit(target_type, target_id, create.field_name)
-            if latest:
-                old_value = latest.new_value
-
-        # 创建数据库记录
-        now = datetime.now(timezone.utc)
-        db_edit = ReviewEdit(
-            target_type=target_type,
-            target_id=target_id,
-            field_name=create.field_name,
-            old_value=json.dumps(old_value) if old_value is not None else None,
-            new_value=json.dumps(create.new_value) if create.new_value is not None else None,
-            reason=create.reason,
-            reviewer=create.reviewer,
-            created_at=now,
-        )
+        db_edit = self._build_db_edit(target_type, target_id, create)
         self.session.add(db_edit)
         self.session.commit()
         self.session.refresh(db_edit)
-
-        # 转换为响应模型
-        return ReviewEditResponse(
-            id=db_edit.id,
-            target_type=db_edit.target_type,
-            target_id=db_edit.target_id,
-            field_name=db_edit.field_name,
-            old_value=json.loads(db_edit.old_value) if db_edit.old_value else None,
-            new_value=json.loads(db_edit.new_value) if db_edit.new_value else None,
-            reason=db_edit.reason,
-            reviewer=db_edit.reviewer,
-            source="manual",
-            created_at=db_edit.created_at,
-        )
+        return self._db_to_response(db_edit)
 
     def create_batch(
         self,
@@ -139,12 +92,22 @@ class DatabaseReviewService:
         Returns:
             创建的修订记录列表
         """
-        results = []
-        for create in batch:
-            if reason and not create.reason:
-                create = create.model_copy(update={"reason": reason})
-            results.append(self.create_edit(target_type, target_id, create))
-        return results
+        db_edits: list[ReviewEdit] = []
+        try:
+            for create in batch:
+                if reason and not create.reason:
+                    create = create.model_copy(update={"reason": reason})
+                db_edits.append(self._build_db_edit(target_type, target_id, create))
+
+            for db_edit in db_edits:
+                self.session.add(db_edit)
+            self.session.commit()
+            for db_edit in db_edits:
+                self.session.refresh(db_edit)
+            return [self._db_to_response(db_edit) for db_edit in db_edits]
+        except Exception:
+            self.session.rollback()
+            raise
 
     def get_edit(self, edit_id: uuid.UUID) -> ReviewEditResponse | None:
         """获取单条修订记录"""
@@ -216,10 +179,18 @@ class DatabaseReviewService:
         """
         latest = self._get_latest_edit(target_type, target_id, field_name)
         if latest:
+            if self._is_reset_to_auto_value(self._extract_edit_value(latest.new_value)):
+                return OverrideStatus(
+                    field_name=field_name,
+                    source="auto",
+                    last_manual_value=None,
+                    last_manual_at=latest.created_at,
+                    current_auto_value=None,
+                )
             return OverrideStatus(
                 field_name=field_name,
                 source="manual",
-                last_manual_value=latest.new_value,
+                last_manual_value=self._extract_edit_value(latest.new_value),
                 last_manual_at=latest.created_at,
                 current_auto_value=None,  # 需要从业务层查询自动值
             )
@@ -255,7 +226,10 @@ class DatabaseReviewService:
         """
         latest = self._get_latest_edit(target_type, target_id, field_name)
         if latest:
-            return latest.new_value
+            latest_value = self._extract_edit_value(latest.new_value)
+            if self._is_reset_to_auto_value(latest_value):
+                return auto_value
+            return latest_value
         return auto_value
 
     def revert_edit(self, edit_id: uuid.UUID, reviewer: str = "owner") -> ReviewEditResponse | None:
@@ -315,6 +289,59 @@ class DatabaseReviewService:
         if db_edit is None:
             return None
         return self._db_to_response(db_edit)
+
+    def _build_db_edit(
+        self,
+        target_type: str,
+        target_id: uuid.UUID,
+        create: ReviewEditCreate,
+    ) -> ReviewEdit:
+        self._validate_target_field_pair(target_type, create.field_name)
+        old_value = create.old_value
+        if old_value is None:
+            latest = self._get_latest_edit(target_type, target_id, create.field_name)
+            if latest:
+                old_value = self._extract_edit_value(latest.new_value)
+
+        return ReviewEdit(
+            target_type=target_type,
+            target_id=target_id,
+            field_name=create.field_name,
+            old_value=json.dumps(old_value) if old_value is not None else None,
+            new_value=json.dumps(create.new_value) if create.new_value is not None else None,
+            reason=create.reason,
+            reviewer=create.reviewer,
+            created_at=datetime.now(timezone.utc),
+        )
+
+    def _validate_target_field_pair(self, target_type: str, field_name: str) -> None:
+        try:
+            tt = ReviewTargetType(target_type)
+        except ValueError:
+            valid = sorted(t.value for t in ReviewTargetType)
+            raise InvalidReviewError(
+                f"无效的 target_type: {target_type!r}，合法值: {valid}"
+            )
+        allowed = ALLOWED_FIELD_NAMES.get(tt, [])
+        allowed_values = [fn.value for fn in allowed]
+        if field_name not in allowed_values:
+            raise InvalidReviewError(
+                f"target_type={target_type!r} 不允许修订字段 {field_name!r}，"
+                f"允许的字段: {allowed_values}"
+            )
+
+    def _extract_edit_value(self, value: Any) -> Any:
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except json.JSONDecodeError:
+                return value
+            if parsed == RESET_TO_AUTO_SENTINEL:
+                return parsed
+        return value
+
+    def _is_reset_to_auto_value(self, value: Any) -> bool:
+        return value == RESET_TO_AUTO_SENTINEL
 
     def _db_to_response(self, db_edit: ReviewEdit) -> ReviewEditResponse:
         """将数据库模型转换为响应模型"""

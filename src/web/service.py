@@ -17,7 +17,7 @@ from sqlalchemy import Text, cast, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from src.admin.review_schemas import ReviewEditCreate
-from src.admin.review_service_db import DatabaseReviewService
+from src.admin.review_service_db import DatabaseReviewService, RESET_TO_AUTO_SENTINEL
 from src.application.orchestrator import DocumentPipelineOrchestrator
 from src.config import (
     get_session_factory,
@@ -27,11 +27,14 @@ from src.config import (
 )
 from src.domain.enums import CredibilityLevel, PriorityLevel, SourceType, WatchlistStatus
 from src.domain.models import (
+    DailyBrief,
     Document,
     DocumentEntity,
     DocumentSummary,
     DocumentTopic,
     Entity,
+    OpportunityAssessment,
+    OpportunityEvidence,
     ReviewEdit,
     Source,
     Topic,
@@ -57,6 +60,23 @@ _AI_TASK_VALUES = ("summarization", "analysis", "qa")
 _QA_RETRIEVAL_LIMIT = 50
 _QA_EVIDENCE_INSPECTION_LIMIT = 8
 _QA_EVIDENCE_RETURN_LIMIT = 3
+_OPPORTUNITY_REVIEW_FIELD_TO_ATTR = {
+    "need_realness": "need_realness",
+    "market_gap": "market_gap",
+    "feasibility": "feasibility",
+    "priority_score": "priority",
+    "evidence_score": "evidence_score",
+    "total_score": "total_score",
+    "uncertainty": "uncertainty",
+    "uncertainty_reason": "uncertainty_reason",
+    "status": "status",
+}
+_OPPORTUNITY_REVIEW_FIELDS = tuple(_OPPORTUNITY_REVIEW_FIELD_TO_ATTR.keys())
+_OPPORTUNITY_STATUS_VALUES = ("candidate", "confirmed", "dismissed", "watching")
+_RISK_REVIEW_FIELDS = ("severity", "description")
+_RISK_SEVERITY_VALUES = ("high", "medium", "low")
+_UNCERTAINTY_REVIEW_FIELDS = ("uncertainty_note", "uncertainty_status")
+_UNCERTAINTY_STATUS_VALUES = ("open", "watching", "resolved")
 
 
 @dataclass(slots=True)
@@ -92,6 +112,39 @@ class SourceView:
     last_import_at: str | None
     last_result: str | None
     raw_config_json: str
+
+
+@dataclass(slots=True)
+class OpportunityReviewView:
+    opportunity: OpportunityAssessment
+    auto_values: dict[str, Any]
+    effective_values: dict[str, Any]
+    history: list[Any]
+    source_document_title: str | None
+
+
+@dataclass(slots=True)
+class RiskReviewView:
+    brief: DailyBrief
+    risk_item: dict[str, Any]
+    item_id: str
+    route_id: str
+    target_id: uuid.UUID
+    auto_values: dict[str, Any]
+    effective_values: dict[str, Any]
+    history: list[Any]
+
+
+@dataclass(slots=True)
+class UncertaintyReviewView:
+    brief: DailyBrief
+    uncertainty_item: str
+    item_id: str
+    route_id: str
+    target_id: uuid.UUID
+    auto_values: dict[str, Any]
+    effective_values: dict[str, Any]
+    history: list[Any]
 
 
 class WebMvpService:
@@ -345,6 +398,79 @@ class WebMvpService:
 
         return self._run_db_read(_query, empty=[])
 
+    def list_review_opportunities(self) -> tuple[list[OpportunityReviewView], str | None]:
+        def _query(session: Session) -> list[OpportunityReviewView]:
+            stmt = (
+                select(OpportunityAssessment)
+                .options(
+                    selectinload(OpportunityAssessment.evidence_items).selectinload(
+                        OpportunityEvidence.document
+                    )
+                )
+                .order_by(OpportunityAssessment.updated_at.desc())
+                .limit(20)
+            )
+            opportunities = list(session.scalars(stmt).unique())
+            review_service = DatabaseReviewService(session)
+            return [
+                self._build_opportunity_review_view(review_service, opportunity)
+                for opportunity in opportunities
+            ]
+
+        return self._run_db_read(_query, empty=[])
+
+    def list_review_risks(self) -> tuple[list[RiskReviewView], str | None]:
+        def _query(session: Session) -> list[RiskReviewView]:
+            stmt = (
+                select(DailyBrief)
+                .where(DailyBrief.risks.is_not(None))
+                .order_by(DailyBrief.updated_at.desc())
+                .limit(20)
+            )
+            briefs = list(session.scalars(stmt).unique())
+            review_service = DatabaseReviewService(session)
+            views: list[RiskReviewView] = []
+            for brief in briefs:
+                for risk_item, item_id, target_id in self._iter_daily_brief_risk_entries(brief):
+                    views.append(
+                        self._build_risk_review_view(
+                            review_service,
+                            brief,
+                            risk_item,
+                            item_id=item_id,
+                            target_id=target_id,
+                        )
+                    )
+            return views
+
+        return self._run_db_read(_query, empty=[])
+
+    def list_review_uncertainties(self) -> tuple[list[UncertaintyReviewView], str | None]:
+        def _query(session: Session) -> list[UncertaintyReviewView]:
+            stmt = (
+                select(DailyBrief)
+                .where(DailyBrief.uncertainties.is_not(None))
+                .order_by(DailyBrief.updated_at.desc())
+                .limit(20)
+            )
+            briefs = list(session.scalars(stmt).unique())
+            review_service = DatabaseReviewService(session)
+            views: list[UncertaintyReviewView] = []
+            for brief in briefs:
+                for uncertainty_item, item_id, target_id in self._iter_daily_brief_uncertainty_entries(brief):
+                    views.append(
+                        self._build_uncertainty_review_view(
+                            review_service,
+                            brief,
+                            uncertainty_item,
+                            item_id=item_id,
+                            target_id=target_id,
+                        )
+                    )
+            return views
+
+        return self._run_db_read(_query, empty=[])
+
     def get_review_history(self, summary_id: uuid.UUID) -> list[ReviewEdit]:
         session = self._try_create_db_session()
         if session is None:
@@ -416,6 +542,212 @@ class WebMvpService:
             service.create_batch("summary", summary.id, edits, reason=form.get("reason"))
             session.commit()
             return "Summary review saved."
+        except Exception as exc:
+            session.rollback()
+            return f"Failed to save review: {type(exc).__name__}: {exc}"
+        finally:
+            session.close()
+
+    def save_opportunity_review(self, opportunity_id: str, form: dict[str, str]) -> str:
+        session = self._require_session()
+        try:
+            opportunity = session.get(OpportunityAssessment, uuid.UUID(opportunity_id))
+            if opportunity is None:
+                return "Opportunity not found."
+
+            review_service = DatabaseReviewService(session)
+            auto_values = self._get_opportunity_auto_values(opportunity)
+            current_values = {
+                field_name: review_service.get_effective_value(
+                    "opportunity_score",
+                    opportunity.id,
+                    field_name,
+                    auto_values[field_name],
+                )
+                for field_name in _OPPORTUNITY_REVIEW_FIELDS
+            }
+            override_sources = {
+                field_name: review_service.get_override_status(
+                    "opportunity_score",
+                    opportunity.id,
+                    field_name,
+                ).source
+                for field_name in _OPPORTUNITY_REVIEW_FIELDS
+            }
+            edits: list[ReviewEditCreate] = []
+
+            for field_name in _OPPORTUNITY_REVIEW_FIELDS:
+                new_value = self._parse_opportunity_review_form_value(
+                    field_name,
+                    form,
+                    auto_value=auto_values[field_name],
+                    override_source=override_sources[field_name],
+                )
+                if new_value == current_values[field_name]:
+                    continue
+                edits.append(
+                    ReviewEditCreate(
+                        field_name=field_name,
+                        old_value=current_values[field_name],
+                        new_value=new_value,
+                        reason=form.get("reason") or "Web opportunity review update",
+                        reviewer="owner",
+                    )
+                )
+
+            if not edits:
+                return "No opportunity changes detected."
+
+            review_service.create_batch(
+                "opportunity_score",
+                opportunity.id,
+                edits,
+                reason=form.get("reason"),
+            )
+            return "Opportunity review saved."
+        except ValueError as exc:
+            session.rollback()
+            return str(exc)
+        except Exception as exc:
+            session.rollback()
+            return f"Failed to save review: {type(exc).__name__}: {exc}"
+        finally:
+            session.close()
+
+    def save_risk_review(self, brief_id: str, route_id: str, form: dict[str, str]) -> str:
+        session = self._require_session()
+        try:
+            brief = session.get(DailyBrief, uuid.UUID(brief_id))
+            if brief is None:
+                return "Risk brief not found."
+
+            risk_entry = self._find_daily_brief_risk_entry_by_route_id(brief, route_id)
+            if risk_entry is None:
+                return "Risk item not found."
+            risk_item, _, target_id = risk_entry
+
+            review_service = DatabaseReviewService(session)
+            auto_values = self._get_risk_auto_values(risk_item)
+            current_values = {
+                field_name: review_service.get_effective_value(
+                    "risk",
+                    target_id,
+                    field_name,
+                    auto_values[field_name],
+                )
+                for field_name in _RISK_REVIEW_FIELDS
+            }
+            override_sources = {
+                field_name: review_service.get_override_status(
+                    "risk",
+                    target_id,
+                    field_name,
+                ).source
+                for field_name in _RISK_REVIEW_FIELDS
+            }
+            edits: list[ReviewEditCreate] = []
+
+            for field_name in _RISK_REVIEW_FIELDS:
+                new_value = self._parse_risk_review_form_value(
+                    field_name,
+                    form,
+                    override_source=override_sources[field_name],
+                )
+                if new_value == current_values[field_name]:
+                    continue
+                edits.append(
+                    ReviewEditCreate(
+                        field_name=field_name,
+                        old_value=current_values[field_name],
+                        new_value=new_value,
+                        reason=form.get("reason") or "Web risk review update",
+                        reviewer="owner",
+                    )
+                )
+
+            if not edits:
+                return "No risk changes detected."
+
+            review_service.create_batch(
+                "risk",
+                target_id,
+                edits,
+                reason=form.get("reason"),
+            )
+            return "Risk review saved."
+        except ValueError as exc:
+            session.rollback()
+            return str(exc)
+        except Exception as exc:
+            session.rollback()
+            return f"Failed to save review: {type(exc).__name__}: {exc}"
+        finally:
+            session.close()
+
+    def save_uncertainty_review(self, brief_id: str, route_id: str, form: dict[str, str]) -> str:
+        session = self._require_session()
+        try:
+            brief = session.get(DailyBrief, uuid.UUID(brief_id))
+            if brief is None:
+                return "Uncertainty brief not found."
+
+            uncertainty_entry = self._find_daily_brief_uncertainty_entry_by_route_id(brief, route_id)
+            if uncertainty_entry is None:
+                return "Uncertainty item not found."
+            uncertainty_item, _, target_id = uncertainty_entry
+
+            review_service = DatabaseReviewService(session)
+            auto_values = self._get_uncertainty_auto_values(uncertainty_item)
+            current_values = {
+                field_name: review_service.get_effective_value(
+                    "uncertainty",
+                    target_id,
+                    field_name,
+                    auto_values[field_name],
+                )
+                for field_name in _UNCERTAINTY_REVIEW_FIELDS
+            }
+            override_sources = {
+                field_name: review_service.get_override_status(
+                    "uncertainty",
+                    target_id,
+                    field_name,
+                ).source
+                for field_name in _UNCERTAINTY_REVIEW_FIELDS
+            }
+            edits: list[ReviewEditCreate] = []
+
+            for field_name in _UNCERTAINTY_REVIEW_FIELDS:
+                new_value = self._parse_uncertainty_review_form_value(
+                    field_name,
+                    form,
+                    override_source=override_sources[field_name],
+                )
+                if new_value == current_values[field_name]:
+                    continue
+                edits.append(
+                    ReviewEditCreate(
+                        field_name=field_name,
+                        old_value=current_values[field_name],
+                        new_value=new_value,
+                        reason=form.get("reason") or "Web uncertainty review update",
+                        reviewer="owner",
+                    )
+                )
+
+            if not edits:
+                return "No uncertainty changes detected."
+
+            review_service.create_batch(
+                "uncertainty",
+                target_id,
+                edits,
+                reason=form.get("reason"),
+            )
+            return "Uncertainty review saved."
+        except ValueError as exc:
+            session.rollback()
+            return str(exc)
         except Exception as exc:
             session.rollback()
             return f"Failed to save review: {type(exc).__name__}: {exc}"
@@ -639,8 +971,14 @@ class WebMvpService:
     def ask_question(self, question: str, provider_id: str = "") -> dict[str, Any]:
         providers = self.list_ai_providers()
         provider = self._select_provider_for_task(providers, provider_id=provider_id, task="qa")
-        documents, db_error = self.search_documents_for_question(question)
-        evidence = self._build_evidence_from_documents(documents[:_QA_EVIDENCE_INSPECTION_LIMIT], question)
+        documents, document_error = self.search_documents_for_question(question)
+        briefs, brief_error = self.search_briefs_for_question(question)
+        db_error = self._merge_error_messages(document_error, brief_error)
+        evidence = self._build_ask_evidence(
+            documents[:_QA_EVIDENCE_INSPECTION_LIMIT],
+            briefs[:_QA_EVIDENCE_INSPECTION_LIMIT],
+            question,
+        )
         evidence_sufficient, sufficiency_note = self._assess_evidence_sufficiency(evidence)
 
         answer = ""
@@ -842,20 +1180,86 @@ class WebMvpService:
 
         return self._run_db_read(_query, empty=[])
 
-    def _build_evidence_from_documents(self, documents: list[Document], question: str) -> list[dict[str, Any]]:
+    def search_briefs_for_question(self, question: str) -> tuple[list[DailyBrief], str | None]:
+        terms = self._build_query_terms(question)
+
+        def _query(session: Session) -> list[DailyBrief]:
+            stmt = (
+                select(DailyBrief)
+                .order_by(DailyBrief.updated_at.desc())
+                .limit(_QA_RETRIEVAL_LIMIT)
+            )
+            if terms:
+                conditions = []
+                for term in terms:
+                    pattern = f"%{term}%"
+                    conditions.extend(
+                        [
+                            DailyBrief.summary_en.ilike(pattern),
+                            DailyBrief.summary_zh.ilike(pattern),
+                            DailyBrief.content_en.ilike(pattern),
+                            DailyBrief.content_zh.ilike(pattern),
+                            cast(DailyBrief.risks, Text).ilike(pattern),
+                            cast(DailyBrief.uncertainties, Text).ilike(pattern),
+                        ]
+                    )
+                stmt = stmt.where(or_(*conditions))
+            return self._rank_briefs_by_terms(list(session.scalars(stmt).unique()), terms)
+
+        return self._run_db_read(_query, empty=[])
+
+    def _build_ask_evidence(
+        self,
+        documents: list[Document],
+        briefs: list[DailyBrief],
+        question: str,
+    ) -> list[dict[str, Any]]:
+        session = self._try_create_db_session()
+        review_service = DatabaseReviewService(session) if session is not None else None
+        try:
+            evidence = self._build_evidence_from_documents(documents, question, review_service=review_service)
+            evidence.extend(self._build_evidence_from_briefs(briefs, question, review_service=review_service))
+            evidence.sort(key=lambda item: item["score"], reverse=True)
+            return evidence[:_QA_EVIDENCE_RETURN_LIMIT]
+        finally:
+            if session is not None:
+                session.close()
+
+    def _build_evidence_from_documents(
+        self,
+        documents: list[Document],
+        question: str,
+        *,
+        review_service: DatabaseReviewService | None = None,
+    ) -> list[dict[str, Any]]:
         evidence: list[dict[str, Any]] = []
         question_terms = self._build_query_terms(question)
+        opportunities_by_document = self._collect_opportunities_by_document(documents, review_service)
         for document in documents:
-            score, matched_terms = self._score_document_for_terms(document, question_terms)
+            summary_text = self._build_document_ask_summary(
+                document,
+                opportunities_by_document.get(document.id, []),
+                review_service,
+            )
+            score, matched_terms = self._score_document_for_terms(
+                document,
+                question_terms,
+                summary_text=summary_text,
+            )
             if score <= 0:
                 continue
-            snippet, summary_text, match_basis = self._pick_snippet(document, question_terms)
+            snippet, rendered_summary, match_basis = self._pick_snippet(
+                document,
+                question_terms,
+                summary_text=summary_text,
+            )
             evidence.append(
                 {
+                    "evidence_type": "document",
                     "document_id": str(document.id),
                     "title": document.title,
                     "source": document.source.name if document.source else None,
-                    "summary": summary_text,
+                    "summary": rendered_summary,
                     "snippet": snippet,
                     "match_basis": match_basis,
                     "matched_terms": matched_terms,
@@ -866,23 +1270,68 @@ class WebMvpService:
         evidence.sort(key=lambda item: item["score"], reverse=True)
         return evidence[:_QA_EVIDENCE_RETURN_LIMIT]
 
-    def _pick_snippet(self, document: Document, question_terms: list[str]) -> tuple[str, str | None, str]:
+    def _build_evidence_from_briefs(
+        self,
+        briefs: list[DailyBrief],
+        question: str,
+        *,
+        review_service: DatabaseReviewService | None = None,
+    ) -> list[dict[str, Any]]:
+        evidence: list[dict[str, Any]] = []
+        question_terms = self._build_query_terms(question)
+        for brief in briefs:
+            summary_text = self._build_brief_ask_summary(brief, review_service)
+            score, matched_terms = self._score_brief_for_terms(brief, question_terms, summary_text=summary_text)
+            if score <= 0:
+                continue
+            snippet = self._clip_matching_text(summary_text, question_terms, default_size=220)
+            if not snippet:
+                snippet = self._clip_matching_text(
+                    f"{brief.content_en or ''} {brief.content_zh or ''}",
+                    question_terms,
+                    default_size=220,
+                )
+            evidence.append(
+                {
+                    "evidence_type": "brief",
+                    "document_id": None,
+                    "brief_id": str(brief.id),
+                    "title": f"Daily Brief {brief.brief_date.date()}",
+                    "source": "Daily Brief",
+                    "summary": summary_text,
+                    "snippet": snippet or summary_text,
+                    "match_basis": "summary" if summary_text else "content",
+                    "matched_terms": matched_terms,
+                    "score": score,
+                    "url": None,
+                }
+            )
+        evidence.sort(key=lambda item: item["score"], reverse=True)
+        return evidence[:_QA_EVIDENCE_RETURN_LIMIT]
+
+    def _pick_snippet(
+        self,
+        document: Document,
+        question_terms: list[str],
+        *,
+        summary_text: str | None = None,
+    ) -> tuple[str, str | None, str]:
         key_point = self._pick_matching_line(document.summary.key_points or [], question_terms) if document.summary else None
         if key_point:
-            return key_point, self._build_summary_text(document), "key_point"
+            return key_point, summary_text or self._build_summary_text(document), "key_point"
 
-        summary_text = self._build_summary_text(document)
-        if summary_text:
-            summary_snippet = self._clip_matching_text(summary_text, question_terms, default_size=220)
+        effective_summary = summary_text if summary_text is not None else self._build_summary_text(document)
+        if effective_summary:
+            summary_snippet = self._clip_matching_text(effective_summary, question_terms, default_size=220)
             if summary_snippet:
-                return summary_snippet, summary_text, "summary"
+                return summary_snippet, effective_summary, "summary"
 
         content_snippet = self._clip_matching_text(document.content_text or "", question_terms, default_size=220)
         if content_snippet:
-            return content_snippet, summary_text or None, "content"
+            return content_snippet, effective_summary or None, "content"
 
-        fallback = summary_text or self._clip_matching_text(document.content_text or "", question_terms, default_size=220)
-        return fallback, summary_text or None, "fallback"
+        fallback = effective_summary or self._clip_matching_text(document.content_text or "", question_terms, default_size=220)
+        return fallback, effective_summary or None, "fallback"
 
     def _build_local_answer(self, question: str, evidence: list[dict[str, Any]], sufficiency_note: str) -> str:
         if not evidence:
@@ -1020,14 +1469,29 @@ class WebMvpService:
         scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
         return [document for score, _, document in scored if score > 0]
 
-    def _score_document_for_terms(self, document: Document, terms: list[str]) -> tuple[int, int]:
+    def _rank_briefs_by_terms(self, briefs: list[DailyBrief], terms: list[str]) -> list[DailyBrief]:
+        scored: list[tuple[int, datetime, DailyBrief]] = []
+        for brief in briefs:
+            score, _ = self._score_brief_for_terms(brief, terms)
+            recency = brief.updated_at or brief.brief_date or datetime.fromtimestamp(0, tz=timezone.utc)
+            scored.append((score, recency, brief))
+        scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        return [brief for score, _, brief in scored if score > 0] if terms else [brief for _, _, brief in scored]
+
+    def _score_document_for_terms(
+        self,
+        document: Document,
+        terms: list[str],
+        *,
+        summary_text: str | None = None,
+    ) -> tuple[int, int]:
         if not terms:
             return (0, 0)
 
         title_text = (document.title or "").lower()
         content_text = (document.content_text or "").lower()
         url_text = (document.url or "").lower()
-        summary_text = self._build_summary_text(document).lower()
+        summary_text = (summary_text if summary_text is not None else self._build_summary_text(document)).lower()
         key_points_text = self._build_key_points_text(document).lower()
 
         summary_matches = 0
@@ -1048,15 +1512,85 @@ class WebMvpService:
         matched_terms = summary_matches + title_matches + content_matches + url_matches
         return score, matched_terms
 
+    def _score_brief_for_terms(
+        self,
+        brief: DailyBrief,
+        terms: list[str],
+        *,
+        summary_text: str | None = None,
+    ) -> tuple[int, int]:
+        if not terms:
+            return (0, 0)
+
+        effective_summary = (summary_text if summary_text is not None else self._build_brief_search_text(brief)).lower()
+        content_text = self._build_brief_search_text(brief).lower()
+        summary_matches = 0
+        content_matches = 0
+        for term in terms:
+            if term in effective_summary:
+                summary_matches += 1
+            if term in content_text:
+                content_matches += 1
+        score = (summary_matches * 6) + (content_matches * 2)
+        matched_terms = summary_matches + content_matches
+        return score, matched_terms
+
     def _build_summary_text(self, document: Document) -> str:
         if document.summary is None:
             return ""
         return document.summary.summary_en or document.summary.summary_zh or ""
 
+    def _build_document_ask_summary(
+        self,
+        document: Document,
+        opportunities: list[OpportunityAssessment],
+        review_service: DatabaseReviewService | None,
+    ) -> str:
+        base_summary = self._build_summary_text(document)
+        reviewed_opportunities = self._build_reviewed_opportunity_summary(opportunities, review_service)
+        if reviewed_opportunities and base_summary:
+            return f"{base_summary}\n\nReviewed opportunities: {reviewed_opportunities}"
+        if reviewed_opportunities:
+            return f"Reviewed opportunities: {reviewed_opportunities}"
+        return base_summary
+
     def _build_key_points_text(self, document: Document) -> str:
         if document.summary is None or not document.summary.key_points:
             return ""
         return " ".join(str(point).strip() for point in document.summary.key_points if str(point).strip())
+
+    def _build_brief_search_text(self, brief: DailyBrief) -> str:
+        values = [
+            brief.summary_en or "",
+            brief.summary_zh or "",
+            brief.content_en or "",
+            brief.content_zh or "",
+            json.dumps(brief.risks or [], ensure_ascii=False),
+            json.dumps(brief.uncertainties or [], ensure_ascii=False),
+        ]
+        return " ".join(value for value in values if value).strip()
+
+    def _build_brief_ask_summary(
+        self,
+        brief: DailyBrief,
+        review_service: DatabaseReviewService | None,
+    ) -> str:
+        sections = []
+        base_summary = brief.summary_en or brief.summary_zh or ""
+        if base_summary:
+            sections.append(base_summary)
+
+        reviewed_risks = self._build_reviewed_risk_summary(brief, review_service)
+        if reviewed_risks:
+            sections.append(f"Reviewed risks: {reviewed_risks}")
+
+        reviewed_uncertainties = self._build_reviewed_uncertainty_summary(brief, review_service)
+        if reviewed_uncertainties:
+            sections.append(f"Reviewed uncertainties: {reviewed_uncertainties}")
+
+        if sections:
+            return "\n\n".join(sections)
+        return self._build_brief_search_text(brief)
 
     def _pick_matching_line(self, values: list[Any], question_terms: list[str]) -> str | None:
         cleaned_values = [str(value).strip() for value in values if str(value).strip()]
@@ -1079,6 +1613,12 @@ class WebMvpService:
                 return normalized[start:end].strip()
         return normalized[:default_size].strip()
 
+    def _merge_error_messages(self, *messages: str | None) -> str | None:
+        cleaned = [message for message in messages if message]
+        if not cleaned:
+            return None
+        return "; ".join(cleaned)
+
     def _assess_evidence_sufficiency(self, evidence: list[dict[str, Any]]) -> tuple[bool, str]:
         if not evidence:
             return False, "No local evidence matched the question."
@@ -1095,6 +1635,389 @@ class WebMvpService:
         if strong_items and total_matched_terms >= 2 and strong_items[0].get("match_basis") in {"key_point", "summary"}:
             return True, "A focused local summary/key-point match was found."
         return False, "Only weak or partial local evidence was found."
+
+    def _build_opportunity_review_view(
+        self,
+        review_service: DatabaseReviewService,
+        opportunity: OpportunityAssessment,
+    ) -> OpportunityReviewView:
+        auto_values = self._get_opportunity_auto_values(opportunity)
+        effective_values = {
+            field_name: review_service.get_effective_value(
+                "opportunity_score",
+                opportunity.id,
+                field_name,
+                auto_values[field_name],
+            )
+            for field_name in _OPPORTUNITY_REVIEW_FIELDS
+        }
+        history = review_service.get_history("opportunity_score", opportunity.id).edits[:5]
+        return OpportunityReviewView(
+            opportunity=opportunity,
+            auto_values=auto_values,
+            effective_values=effective_values,
+            history=history,
+            source_document_title=self._pick_opportunity_source_document_title(opportunity),
+        )
+
+    def _get_opportunity_auto_values(self, opportunity: OpportunityAssessment) -> dict[str, Any]:
+        return {
+            field_name: getattr(opportunity, attr_name)
+            for field_name, attr_name in _OPPORTUNITY_REVIEW_FIELD_TO_ATTR.items()
+        }
+
+    def _pick_opportunity_source_document_title(self, opportunity: OpportunityAssessment) -> str | None:
+        for evidence_item in getattr(opportunity, "evidence_items", []) or []:
+            document = getattr(evidence_item, "document", None)
+            if document is not None and document.title:
+                return document.title
+        fallback_document = getattr(opportunity, "_review_test_document", None)
+        if fallback_document is not None:
+            return getattr(fallback_document, "title", None)
+        return None
+
+    def _collect_opportunities_by_document(
+        self,
+        documents: list[Document],
+        review_service: DatabaseReviewService | None,
+    ) -> dict[uuid.UUID, list[OpportunityAssessment]]:
+        opportunities_by_document: dict[uuid.UUID, list[OpportunityAssessment]] = {
+            document.id: [] for document in documents
+        }
+        document_ids = [document.id for document in documents]
+        if not document_ids:
+            return opportunities_by_document
+
+        for document in documents:
+            for opportunity in getattr(document, "_ask_test_opportunities", []) or []:
+                opportunities_by_document.setdefault(document.id, []).append(opportunity)
+
+        if review_service is None or not hasattr(review_service.session, "scalars"):
+            return opportunities_by_document
+
+        stmt = (
+            select(OpportunityAssessment)
+            .join(OpportunityEvidence, OpportunityEvidence.opportunity_id == OpportunityAssessment.id)
+            .options(selectinload(OpportunityAssessment.evidence_items))
+            .where(OpportunityEvidence.document_id.in_(document_ids))
+            .order_by(OpportunityAssessment.updated_at.desc())
+        )
+        opportunities = list(review_service.session.scalars(stmt).unique())
+        for opportunity in opportunities:
+            linked_document_ids = {
+                evidence_item.document_id
+                for evidence_item in opportunity.evidence_items or []
+                if evidence_item.document_id in opportunities_by_document
+            }
+            for document_id in linked_document_ids:
+                if all(existing.id != opportunity.id for existing in opportunities_by_document[document_id]):
+                    opportunities_by_document[document_id].append(opportunity)
+        return opportunities_by_document
+
+    def _build_reviewed_opportunity_summary(
+        self,
+        opportunities: list[OpportunityAssessment],
+        review_service: DatabaseReviewService | None,
+    ) -> str:
+        rendered: list[str] = []
+        for opportunity in opportunities:
+            auto_values = self._get_opportunity_auto_values(opportunity)
+            effective_values = {
+                field_name: (
+                    review_service.get_effective_value("opportunity_score", opportunity.id, field_name, auto_value)
+                    if review_service is not None
+                    else auto_value
+                )
+                for field_name, auto_value in auto_values.items()
+            }
+            title = opportunity.title_en or opportunity.title_zh or "Untitled opportunity"
+            details = [
+                f"status={effective_values.get('status')}",
+                f"priority_score={effective_values.get('priority_score')}",
+                f"total_score={effective_values.get('total_score')}",
+                f"uncertainty={effective_values.get('uncertainty')}",
+            ]
+            if effective_values.get("uncertainty_reason"):
+                details.append(f"uncertainty_reason={effective_values['uncertainty_reason']}")
+            rendered.append(f"{title} ({', '.join(details)})")
+        return " | ".join(rendered)
+
+    def _parse_opportunity_review_form_value(
+        self,
+        field_name: str,
+        form: dict[str, str],
+        *,
+        auto_value: Any,
+        override_source: str,
+    ) -> Any:
+        raw_value = form.get(field_name, "")
+        reset_requested = form.get(f"reset_{field_name}") == "on"
+        value = str(raw_value).strip()
+        if reset_requested or (value == "" and override_source == "manual" and field_name != "uncertainty"):
+            return RESET_TO_AUTO_SENTINEL
+        if field_name in {"need_realness", "market_gap", "feasibility", "priority_score", "evidence_score"}:
+            if not value:
+                return None
+            parsed = int(value)
+            if not 1 <= parsed <= 10:
+                raise ValueError(f"{field_name} must be between 1 and 10.")
+            return parsed
+        if field_name == "total_score":
+            return float(value) if value else None
+        if field_name == "uncertainty":
+            lowered = value.lower()
+            if lowered in {"true", "1", "yes", "on"}:
+                return True
+            if lowered in {"false", "0", "no", "off", ""}:
+                return False
+            raise ValueError("uncertainty must be true or false.")
+        if field_name == "status":
+            if value not in _OPPORTUNITY_STATUS_VALUES:
+                allowed = ", ".join(_OPPORTUNITY_STATUS_VALUES)
+                raise ValueError(f"Invalid opportunity status: {value!r}. Allowed values: {allowed}.")
+            return value
+        return value or None
+
+    def _build_risk_review_view(
+        self,
+        review_service: DatabaseReviewService,
+        brief: DailyBrief,
+        risk_item: dict[str, Any],
+        *,
+        item_id: str,
+        target_id: uuid.UUID,
+    ) -> RiskReviewView:
+        auto_values = self._get_risk_auto_values(risk_item)
+        effective_values = {
+            field_name: review_service.get_effective_value(
+                "risk",
+                target_id,
+                field_name,
+                auto_values[field_name],
+            )
+            for field_name in _RISK_REVIEW_FIELDS
+        }
+        history = review_service.get_history("risk", target_id).edits[:5]
+        return RiskReviewView(
+            brief=brief,
+            risk_item=risk_item,
+            item_id=item_id,
+            route_id=str(target_id),
+            target_id=target_id,
+            auto_values=auto_values,
+            effective_values=effective_values,
+            history=history,
+        )
+
+    def _build_daily_brief_risk_item_id(self, risk_item: dict[str, Any]) -> str:
+        return self._build_daily_brief_risk_base_item_id(risk_item)
+
+    def _build_daily_brief_risk_base_item_id(self, risk_item: dict[str, Any]) -> str:
+        existing = str(risk_item.get("item_id") or "").strip()
+        if existing:
+            return existing
+        title = str(risk_item.get("title") or "").strip()
+        description = str(risk_item.get("description") or "").strip()
+        severity = str(risk_item.get("severity") or "").strip()
+        seed = f"{title}|{description}|{severity}"
+        return uuid.uuid5(uuid.NAMESPACE_URL, seed).hex
+
+    def _build_daily_brief_risk_target_id(self, brief_id: uuid.UUID, item_id: str) -> uuid.UUID:
+        return uuid.uuid5(uuid.NAMESPACE_URL, f"{brief_id}:risk:{item_id}")
+
+    def _iter_daily_brief_risk_entries(
+        self,
+        brief: DailyBrief,
+    ) -> list[tuple[dict[str, Any], str, uuid.UUID]]:
+        entries: list[tuple[dict[str, Any], str, uuid.UUID]] = []
+        seen_counts: dict[str, int] = {}
+        for risk_item in brief.risks or []:
+            if not isinstance(risk_item, dict):
+                continue
+            base_item_id = self._build_daily_brief_risk_base_item_id(risk_item)
+            occurrence = seen_counts.get(base_item_id, 0)
+            seen_counts[base_item_id] = occurrence + 1
+            item_id = f"{base_item_id}:{occurrence}"
+            entries.append((risk_item, item_id, self._build_daily_brief_risk_target_id(brief.id, item_id)))
+        return entries
+
+    def _find_daily_brief_risk_entry_by_route_id(
+        self,
+        brief: DailyBrief,
+        route_id: str,
+    ) -> tuple[dict[str, Any], str, uuid.UUID] | None:
+        for risk_item, item_id, target_id in self._iter_daily_brief_risk_entries(brief):
+            if str(target_id) == route_id:
+                return risk_item, item_id, target_id
+        return None
+
+    def _get_risk_auto_values(self, risk_item: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "severity": risk_item.get("severity"),
+            "description": risk_item.get("description"),
+        }
+
+    def _build_reviewed_risk_summary(
+        self,
+        brief: DailyBrief,
+        review_service: DatabaseReviewService | None,
+    ) -> str:
+        rendered: list[str] = []
+        for risk_item, _, target_id in self._iter_daily_brief_risk_entries(brief):
+            auto_values = self._get_risk_auto_values(risk_item)
+            effective_values = {
+                field_name: (
+                    review_service.get_effective_value("risk", target_id, field_name, auto_value)
+                    if review_service is not None
+                    else auto_value
+                )
+                for field_name, auto_value in auto_values.items()
+            }
+            title = str(risk_item.get("title") or "Untitled risk")
+            rendered.append(
+                f"{title} (severity={effective_values.get('severity')}, description={effective_values.get('description')})"
+            )
+        return " | ".join(rendered)
+
+    def _parse_risk_review_form_value(
+        self,
+        field_name: str,
+        form: dict[str, str],
+        *,
+        override_source: str,
+    ) -> Any:
+        raw_value = form.get(field_name, "")
+        reset_requested = form.get(f"reset_{field_name}") == "on"
+        value = str(raw_value).strip()
+        if reset_requested or (value == "" and override_source == "manual"):
+            return RESET_TO_AUTO_SENTINEL
+        if field_name == "severity":
+            if value not in _RISK_SEVERITY_VALUES:
+                allowed = ", ".join(_RISK_SEVERITY_VALUES)
+                raise ValueError(f"Invalid risk severity: {value!r}. Allowed values: {allowed}.")
+            return value
+        return value or None
+
+    def _build_uncertainty_review_view(
+        self,
+        review_service: DatabaseReviewService,
+        brief: DailyBrief,
+        uncertainty_item: str,
+        *,
+        item_id: str,
+        target_id: uuid.UUID,
+    ) -> UncertaintyReviewView:
+        auto_values = self._get_uncertainty_auto_values(uncertainty_item)
+        effective_values = {
+            field_name: review_service.get_effective_value(
+                "uncertainty",
+                target_id,
+                field_name,
+                auto_values[field_name],
+            )
+            for field_name in _UNCERTAINTY_REVIEW_FIELDS
+        }
+        history = review_service.get_history("uncertainty", target_id).edits[:5]
+        return UncertaintyReviewView(
+            brief=brief,
+            uncertainty_item=uncertainty_item,
+            item_id=item_id,
+            route_id=str(target_id),
+            target_id=target_id,
+            auto_values=auto_values,
+            effective_values=effective_values,
+            history=history,
+        )
+
+    def _build_daily_brief_uncertainty_item_id(self, uncertainty_item: str) -> str:
+        normalized = str(uncertainty_item or "").strip()
+        return uuid.uuid5(uuid.NAMESPACE_URL, normalized).hex
+
+    def _build_daily_brief_uncertainty_target_id(self, brief_id: uuid.UUID, item_id: str) -> uuid.UUID:
+        return uuid.uuid5(uuid.NAMESPACE_URL, f"{brief_id}:uncertainty:{item_id}")
+
+    def _iter_daily_brief_uncertainty_entries(
+        self,
+        brief: DailyBrief,
+    ) -> list[tuple[str, str, uuid.UUID]]:
+        entries: list[tuple[str, str, uuid.UUID]] = []
+        seen_counts: dict[str, int] = {}
+        for uncertainty_item in brief.uncertainties or []:
+            normalized = str(uncertainty_item or "").strip()
+            if not normalized:
+                continue
+            base_item_id = self._build_daily_brief_uncertainty_item_id(normalized)
+            occurrence = seen_counts.get(base_item_id, 0)
+            seen_counts[base_item_id] = occurrence + 1
+            item_id = f"{base_item_id}:{occurrence}"
+            entries.append(
+                (
+                    normalized,
+                    item_id,
+                    self._build_daily_brief_uncertainty_target_id(brief.id, item_id),
+                )
+            )
+        return entries
+
+    def _find_daily_brief_uncertainty_entry_by_route_id(
+        self,
+        brief: DailyBrief,
+        route_id: str,
+    ) -> tuple[str, str, uuid.UUID] | None:
+        for uncertainty_item, item_id, target_id in self._iter_daily_brief_uncertainty_entries(brief):
+            if str(target_id) == route_id:
+                return uncertainty_item, item_id, target_id
+        return None
+
+    def _get_uncertainty_auto_values(self, uncertainty_item: str) -> dict[str, Any]:
+        return {
+            "uncertainty_note": uncertainty_item,
+            "uncertainty_status": None,
+        }
+
+    def _build_reviewed_uncertainty_summary(
+        self,
+        brief: DailyBrief,
+        review_service: DatabaseReviewService | None,
+    ) -> str:
+        rendered: list[str] = []
+        for uncertainty_item, _, target_id in self._iter_daily_brief_uncertainty_entries(brief):
+            auto_values = self._get_uncertainty_auto_values(uncertainty_item)
+            effective_values = {
+                field_name: (
+                    review_service.get_effective_value("uncertainty", target_id, field_name, auto_value)
+                    if review_service is not None
+                    else auto_value
+                )
+                for field_name, auto_value in auto_values.items()
+            }
+            detail = str(effective_values.get("uncertainty_note") or "")
+            status = effective_values.get("uncertainty_status")
+            if status:
+                detail = f"{detail} (status={status})"
+            rendered.append(detail)
+        return " | ".join(item for item in rendered if item)
+
+    def _parse_uncertainty_review_form_value(
+        self,
+        field_name: str,
+        form: dict[str, str],
+        *,
+        override_source: str,
+    ) -> Any:
+        raw_value = form.get(field_name, "")
+        reset_requested = form.get(f"reset_{field_name}") == "on"
+        value = str(raw_value).strip()
+        if reset_requested or (value == "" and override_source == "manual"):
+            return RESET_TO_AUTO_SENTINEL
+        if field_name == "uncertainty_status":
+            if value == "":
+                return None
+            if value not in _UNCERTAINTY_STATUS_VALUES:
+                allowed = ", ".join(_UNCERTAINTY_STATUS_VALUES)
+                raise ValueError(f"Invalid uncertainty status: {value!r}. Allowed values: {allowed}.")
+            return value
+        return value or None
 
     def _validate_str_enum(self, raw_value: str | Any, enum_type: type, *, label: str) -> str:
         value = str(raw_value or "").strip()

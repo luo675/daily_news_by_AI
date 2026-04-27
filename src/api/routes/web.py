@@ -444,8 +444,165 @@ async def document_detail(document_id: str, message: str | None = None) -> HTMLR
 
 @router.get("/web/review")
 async def review_page(message: str | None = None) -> HTMLResponse:
+    uncertainties, uncertainty_error = service.list_review_uncertainties()
+    risks, risk_error = service.list_review_risks()
+    opportunities, opportunity_error = service.list_review_opportunities()
     documents, error = service.list_review_documents()
     sections = []
+    uncertainty_sections = []
+    risk_sections = []
+    opportunity_sections = []
+    for item in uncertainties:
+        history_html = "".join(
+            f"<li>{escape(edit.field_name)} -> {escape(str(edit.new_value))} <span class='muted'>{escape(str(edit.created_at))}</span></li>"
+            for edit in item.history
+        ) or "<li>No review history.</li>"
+        uncertainty_status_options = "".join(
+            [
+                f"<option value=''{' selected' if item.effective_values.get('uncertainty_status') is None else ''}>(auto)</option>"
+            ]
+            + [
+            f"<option value='{escape(value)}'{' selected' if item.effective_values.get('uncertainty_status') == value else ''}>{escape(value)}</option>"
+            for value in ("open", "watching", "resolved")
+            ]
+        )
+        uncertainty_sections.append(
+            f"""
+            <section class="card">
+              <h2>Uncertainty Review</h2>
+              <div><strong>{escape(item.uncertainty_item)}</strong></div>
+              <div class="muted">Brief id: {item.brief.id}</div>
+              <div class="muted">Uncertainty item id: {escape(item.item_id)}</div>
+              <div class="grid cols-2" style="margin-top:12px;">
+                <div>
+                  <h3>Automatic Result</h3>
+                  <div class="pre">uncertainty_note={escape(str(item.auto_values.get("uncertainty_note") or ""))}
+uncertainty_status={escape(str(item.auto_values.get("uncertainty_status") or ""))}</div>
+                </div>
+                <div>
+                  <h3>Manual Effective Values</h3>
+                  <form method="post" action="/web/review/uncertainties/{item.brief.id}/{item.route_id}">
+                    <textarea name="uncertainty_note" placeholder="uncertainty_note">{escape(str(item.effective_values.get("uncertainty_note") or ""))}</textarea>
+                    <label><input type="checkbox" name="reset_uncertainty_note"> reset to auto</label>
+                    <select name="uncertainty_status">{uncertainty_status_options}</select>
+                    <label><input type="checkbox" name="reset_uncertainty_status"> reset to auto</label>
+                    <input name="reason" placeholder="Why are you editing this uncertainty?">
+                    <button>Save Uncertainty Review</button>
+                  </form>
+                </div>
+              </div>
+              <h3>Recent Review Edits</h3>
+              <ul>{history_html}</ul>
+            </section>
+            """
+        )
+    for item in risks:
+        history_html = "".join(
+            f"<li>{escape(edit.field_name)} -> {escape(str(edit.new_value))} <span class='muted'>{escape(str(edit.created_at))}</span></li>"
+            for edit in item.history
+        ) or "<li>No review history.</li>"
+        severity_options = "".join(
+            f"<option value='{escape(value)}'{' selected' if item.effective_values.get('severity') == value else ''}>{escape(value)}</option>"
+            for value in ("high", "medium", "low")
+        )
+        risk_sections.append(
+            f"""
+            <section class="card">
+              <h2>Risk Review</h2>
+              <div><strong>{escape(str(item.risk_item.get("title") or "Untitled risk"))}</strong></div>
+              <div class="muted">Brief id: {item.brief.id}</div>
+              <div class="muted">Risk item id: {escape(item.item_id)}</div>
+              <div class="grid cols-2" style="margin-top:12px;">
+                <div>
+                  <h3>Automatic Result</h3>
+                  <div class="pre">severity={escape(str(item.auto_values.get("severity") or ""))}
+description={escape(str(item.auto_values.get("description") or ""))}</div>
+                </div>
+                <div>
+                  <h3>Manual Effective Values</h3>
+                  <form method="post" action="/web/review/risks/{item.brief.id}/{item.route_id}">
+                    <select name="severity">{severity_options}</select>
+                    <label><input type="checkbox" name="reset_severity"> reset to auto</label>
+                    <textarea name="description" placeholder="description">{escape(str(item.effective_values.get("description") or ""))}</textarea>
+                    <label><input type="checkbox" name="reset_description"> reset to auto</label>
+                    <input name="reason" placeholder="Why are you editing this risk?">
+                    <button>Save Risk Review</button>
+                  </form>
+                </div>
+              </div>
+              <h3>Recent Review Edits</h3>
+              <ul>{history_html}</ul>
+            </section>
+            """
+        )
+    for item in opportunities:
+        opportunity = item.opportunity
+        history_html = "".join(
+            f"<li>{escape(edit.field_name)} -> {escape(str(edit.new_value))} <span class='muted'>{escape(str(edit.created_at))}</span></li>"
+            for edit in item.history
+        ) or "<li>No review history.</li>"
+        status_options = "".join(
+            f"<option value='{escape(value)}'{' selected' if item.effective_values.get('status') == value else ''}>{escape(value)}</option>"
+            for value in ("candidate", "confirmed", "dismissed", "watching")
+        )
+        uncertainty_options = "".join(
+            f"<option value='{value}'{' selected' if item.effective_values.get('uncertainty') is selected else ''}>{label}</option>"
+            for value, selected, label in (
+                ("true", True, "true"),
+                ("false", False, "false"),
+            )
+        )
+        opportunity_sections.append(
+            f"""
+            <section class="card">
+              <h2>Opportunity Review</h2>
+              <div><strong>{escape(opportunity.title_en or opportunity.title_zh or "Untitled opportunity")}</strong></div>
+              <div class="muted">Opportunity target id: {opportunity.id}</div>
+              <div class="muted">Source document: {escape(item.source_document_title or '-')}</div>
+              <div class="grid cols-2" style="margin-top:12px;">
+                <div>
+                  <h3>Automatic Result</h3>
+                  <div class="pre">need_realness={escape(str(item.auto_values.get("need_realness")))}
+market_gap={escape(str(item.auto_values.get("market_gap")))}
+feasibility={escape(str(item.auto_values.get("feasibility")))}
+priority_score={escape(str(item.auto_values.get("priority_score")))}
+evidence_score={escape(str(item.auto_values.get("evidence_score")))}
+total_score={escape(str(item.auto_values.get("total_score")))}
+uncertainty={escape(str(item.auto_values.get("uncertainty")))}
+uncertainty_reason={escape(str(item.auto_values.get("uncertainty_reason") or ""))}
+status={escape(str(item.auto_values.get("status") or ""))}</div>
+                </div>
+                <div>
+                  <h3>Manual Effective Values</h3>
+                  <form method="post" action="/web/review/opportunities/{opportunity.id}">
+                    <input name="need_realness" type="number" min="1" max="10" value="{escape(str(item.effective_values.get("need_realness") or ""))}" placeholder="need_realness">
+                    <label><input type="checkbox" name="reset_need_realness"> reset to auto</label>
+                    <input name="market_gap" type="number" min="1" max="10" value="{escape(str(item.effective_values.get("market_gap") or ""))}" placeholder="market_gap">
+                    <label><input type="checkbox" name="reset_market_gap"> reset to auto</label>
+                    <input name="feasibility" type="number" min="1" max="10" value="{escape(str(item.effective_values.get("feasibility") or ""))}" placeholder="feasibility">
+                    <label><input type="checkbox" name="reset_feasibility"> reset to auto</label>
+                    <input name="priority_score" type="number" min="1" max="10" value="{escape(str(item.effective_values.get("priority_score") or ""))}" placeholder="priority_score">
+                    <label><input type="checkbox" name="reset_priority_score"> reset to auto</label>
+                    <input name="evidence_score" type="number" min="1" max="10" value="{escape(str(item.effective_values.get("evidence_score") or ""))}" placeholder="evidence_score">
+                    <label><input type="checkbox" name="reset_evidence_score"> reset to auto</label>
+                    <input name="total_score" type="number" step="0.1" value="{escape(str(item.effective_values.get("total_score") or ""))}" placeholder="total_score">
+                    <label><input type="checkbox" name="reset_total_score"> reset to auto</label>
+                    <select name="uncertainty">{uncertainty_options}</select>
+                    <label><input type="checkbox" name="reset_uncertainty"> reset to auto</label>
+                    <input name="uncertainty_reason" value="{escape(str(item.effective_values.get("uncertainty_reason") or ""))}" placeholder="uncertainty_reason">
+                    <label><input type="checkbox" name="reset_uncertainty_reason"> reset to auto</label>
+                    <select name="status">{status_options}</select>
+                    <label><input type="checkbox" name="reset_status"> reset to auto</label>
+                    <input name="reason" placeholder="Why are you editing this opportunity?">
+                    <button>Save Opportunity Review</button>
+                  </form>
+                </div>
+              </div>
+              <h3>Recent Review Edits</h3>
+              <ul>{history_html}</ul>
+            </section>
+            """
+        )
     for document in documents:
         summary = document.summary
         if summary is None:
@@ -473,15 +630,42 @@ async def review_page(message: str | None = None) -> HTMLResponse:
             </section>
             """
         )
-    content = "".join(sections) or "<div class='card'>No reviewable document summaries found.</div>"
+    content = "".join(uncertainty_sections + risk_sections + opportunity_sections + sections) or "<div class='card'>No reviewable summaries, opportunities, risks, or uncertainties found.</div>"
+    notes = []
+    if uncertainty_error:
+        notes.append(f"<div class='card'><strong>Database note:</strong> {escape(uncertainty_error)}</div>")
+    if risk_error:
+        notes.append(f"<div class='card'><strong>Database note:</strong> {escape(risk_error)}</div>")
+    if opportunity_error:
+        notes.append(f"<div class='card'><strong>Database note:</strong> {escape(opportunity_error)}</div>")
     if error:
-        content = f"<div class='card'><strong>Database note:</strong> {escape(error)}</div>{content}"
+        notes.append(f"<div class='card'><strong>Database note:</strong> {escape(error)}</div>")
+    if notes:
+        content = "".join(notes) + content
     return _layout("Review", content, message=message)
 
 
 @router.post("/web/review/{summary_id}")
 async def save_review(summary_id: str, request: Request) -> RedirectResponse:
     message = service.save_summary_review(summary_id, await _read_form(request))
+    return _redirect("/web/review", message)
+
+
+@router.post("/web/review/opportunities/{opportunity_id}")
+async def save_opportunity_review(opportunity_id: str, request: Request) -> RedirectResponse:
+    message = service.save_opportunity_review(opportunity_id, await _read_form(request))
+    return _redirect("/web/review", message)
+
+
+@router.post("/web/review/risks/{brief_id}/{route_id}")
+async def save_risk_review(brief_id: str, route_id: str, request: Request) -> RedirectResponse:
+    message = service.save_risk_review(brief_id, route_id, await _read_form(request))
+    return _redirect("/web/review", message)
+
+
+@router.post("/web/review/uncertainties/{brief_id}/{route_id}")
+async def save_uncertainty_review(brief_id: str, route_id: str, request: Request) -> RedirectResponse:
+    message = service.save_uncertainty_review(brief_id, route_id, await _read_form(request))
     return _redirect("/web/review", message)
 
 
@@ -597,7 +781,11 @@ async def ask_submit(request: Request) -> HTMLResponse:
     form = await _read_form(request)
     result = service.ask_question(question=form.get("question", ""), provider_id=form.get("provider_id", ""))
     evidence_html = "".join(
-        f"<li><a href='/web/documents/{escape(item['document_id'])}'>{escape(item['title'])}</a>: {escape(item.get('snippet') or item.get('summary') or '')}</li>"
+        (
+            f"<li><a href='/web/documents/{escape(str(item['document_id']))}'>{escape(item['title'])}</a>: {escape(item.get('snippet') or item.get('summary') or '')}</li>"
+            if item.get("document_id")
+            else f"<li>{escape(item['title'])}: {escape(item.get('snippet') or item.get('summary') or '')}</li>"
+        )
         for item in result["evidence"]
     ) or "<li>No local evidence.</li>"
     body = f"""

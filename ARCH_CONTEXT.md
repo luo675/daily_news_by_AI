@@ -704,6 +704,100 @@
 - 外部 AI 作为知识源的开放式问答
 - 完整生产级数据治理或爬取平台
 
+### 已完成阶段 I：Review 结构化审核闭环扩展
+
+这一阶段已经完成，后续不应再把 Review 理解为“只支持 summary 的最小审核”。当前应理解为：Review 已经覆盖三类结构化判断输出，并保持统一的“自动只读 + review_edits 人工覆盖 + reset to auto + 原子提交”模式。
+
+已确认事实：
+- `opportunities` 人工审核闭环已落地：
+  - review target：单条 `OpportunityAssessment`
+  - 自动结果继续只读
+  - 人工修订仅写入 `review_edits`
+  - 页面读取时通过 `DatabaseReviewService.get_effective_value(...)` 覆盖显示
+  - 已支持 `reset to auto`
+  - 已修复单次提交原子性
+- `risks` 人工审核闭环已落地：
+  - 自动来源：`DailyBrief.risks`
+  - review target：单条 risk item
+  - 未新建独立 risk 表，也未绑定 `Conflict`
+  - 已形成 `item_id / route_id / target_id` 三层标识：
+    - `item_id` 为内部稳定标识
+    - `route_id` 为对外 Web 安全路由标识，直接使用派生后的 `target_id` UUID 字符串
+    - `target_id` 为 `uuid5(brief_id + ":risk:" + item_id)`
+  - 对同一 brief 内内容相同的重复 risk，已通过“基础标识 + 出现序号”拆分为不同 target
+  - 当前开放审核字段仅：
+    - `severity`
+    - `description`
+- `uncertainties` 人工审核闭环已落地：
+  - 自动来源：`DailyBrief.uncertainties`
+  - review target：单条 uncertainty item
+  - 未新建独立 uncertainty 表，也未绑定 `Conflict`
+  - 标识策略沿用 `risks`：
+    - `base_item_id` 基于 uncertainty 字符串确定性生成
+    - 同一 brief 内重复项追加 occurrence index
+    - `target_id = uuid5(brief_id + ":uncertainty:" + item_id)`
+    - `route_id = str(target_id)`
+  - 当前开放审核字段仅：
+    - `uncertainty_note`
+    - `uncertainty_status`
+- 当前 Review 页面已可同时展示并提交：
+  - `Uncertainty Review`
+  - `Risk Review`
+  - `Opportunity Review`
+  - `Summary Review`
+- review 相关自动化验证已扩展覆盖：
+  - 自动值 + 人工覆盖显示
+  - reset to auto
+  - 重复项 distinct target
+  - 页面渲染
+  - 页面 POST 提交
+  - `DatabaseReviewService.create_batch(...)` 原子性
+
+当前明确残留问题：
+- `DailyBrief.uncertainties` 的自动源当前是 `list[str]`，因此 `uncertainty_status` 没有天然自动值。
+- 当前 Web 页面中的 `uncertainty_status` `<select>` 只有 `open / watching / resolved` 三个选项，没有空状态选项；当当前有效值为 `None` 时，如果用户只修改 `uncertainty_note`，浏览器可能会把 `open` 作为默认值提交，导致产生非预期的人工覆盖。
+- 这个问题尚未修复；后续新会话如果继续沿网页产品主线推进，优先级应高于继续扩展新的 review 目标类型。
+
+### 已完成阶段 J：Ask reviewed evidence 优先消费
+
+这一阶段已经完成，当前不应再把 Ask 理解为“只能消费 document summary / key points”。当前应理解为：Ask 仍保持 `local retrieval first` 的最小边界，但已开始优先消费 Review 之后的高信任结构化结果。
+
+已确认事实：
+- `WebMvpService.ask_question()` 已接入 reviewed 优先消费逻辑
+- Ask 当前本地 evidence 组装分为两段：
+  - `search_documents_for_question()`
+  - `search_briefs_for_question()`
+- document evidence：
+  - 仍以 `Document` 为基础
+  - 已在 `_build_evidence_from_documents()` 中附加 reviewed `OpportunityAssessment`
+- brief evidence：
+  - 已新增 `DailyBrief` 维度
+  - 已在 `_build_evidence_from_briefs()` 中组装 reviewed `risks / uncertainties`
+- reviewed 读取继续复用 `DatabaseReviewService.get_effective_value(...)`
+- Ask 当前已优先覆盖以下 reviewed 字段：
+  - opportunities：
+    - `status`
+    - `priority_score`
+    - `total_score`
+    - `uncertainty`
+    - `uncertainty_reason`
+  - risks：
+    - `severity`
+    - `description`
+  - uncertainties：
+    - `uncertainty_note`
+    - `uncertainty_status`
+- 无人工值时会自动回退到自动值；`reset to auto` 继续通过现有 review 机制生效
+- Ask 结果页已做最小兼容调整：
+  - document evidence 继续保留文档链接
+  - brief evidence 不再强依赖 `document_id`，可直接文本展示
+
+当前明确边界：
+- Ask 仍然不是 advanced RAG
+- brief 检索仍是当前的 term matching，不是向量检索
+- 如果问题只命中人工修订值、但完全不命中自动文本，当前仍可能检索不到对应 brief/document
+- `DailyBrief.opportunities` 当前尚未纳入 Ask；当前接入的是 `OpportunityAssessment + OpportunityEvidence.document` 这条链
+
 ### 当前真实稳定边界
 
 截至当前阶段，以下边界已经形成并应继续保持：
@@ -718,8 +812,20 @@
 - Web 层当前主要落在：
   - `src/web/service.py`
   - `src/api/routes/web.py`
+- Review 当前已稳定覆盖四类页面审核对象：
+  - summary
+  - opportunities
+  - risks
+  - uncertainties
+- `opportunities / risks / uncertainties` 当前统一遵循：
+  - 自动结果只读
+  - 人工修订只写 `review_edits`
+  - 读取时通过 `get_effective_value(...)` 覆盖显示
+  - 支持 `reset to auto`
+  - 单次批量提交保持原子性
 - AI provider 当前仍为本地 JSON 存储，Ask history 也为本地 JSON 存储；这在当前 MVP 中是有意保留的最小实现，不应被误判为需要立即 DB 化的缺陷
 - `Source.config["_web"]` 当前承担 Web 维护元数据承载职责；这在当前 MVP 中可接受，不应为了字段“更漂亮”而立即重构 domain/schema
+- Ask 当前已在现有 `local retrieval first + bounded evidence + optional external reasoning` 边界内优先消费 reviewed `opportunities / risks / uncertainties`
 
 ### 当前通常不应再动的区域
 
@@ -731,7 +837,7 @@
 - 已稳定的 CLI / API 主路径
 - 当前 `url_importer` 的能力边界
 - 已形成的 seed 目录工作流结构
-- 当前 Ask 的“local retrieval first + bounded evidence + optional external reasoning”边界
+- 当前 Ask 的“local retrieval first + bounded evidence + optional external reasoning”边界本身
 - 当前 Sources 中 `formal_seed` 的普通 Web 只读语义
 
 不要重复做：
@@ -767,7 +873,7 @@
 下个会话不应再从“搭工作流”起手，也不应直接写代码；当前最合理的起点有两条，取决于会话目标：
 
 - 如果继续沿当前内容维护主线推进：基于最新试跑与评审结论，准备下一轮 observation-oriented maintenance
-- 如果继续沿当前网页产品主线推进：不要再回到信息架构空谈，应从“已稳定 Web MVP 的下一块最小能力扩展”起手；当前最合理的下一块是扩展 Review 的最小结构化审核能力，而不是继续扩 Sources / AI Settings / Ask 的大方向
+- 如果继续沿当前网页产品主线推进：不要再回到信息架构空谈；Review 的最小结构化审核能力与 Ask reviewed evidence 优先消费都已落地。当前最合理的下一步不是继续扩新的审核目标，而是先修复 `uncertainty_status` 的页面默认提交语义问题，再决定是继续完善 Ask 结果呈现，还是进入周边本地存储收口
 
 推荐起手顺序：
 1. 先确认当前是走“内容维护主线”还是“网页版 MVP 规划主线”
@@ -778,11 +884,12 @@
 3. 如果走网页版 MVP 主线：
    - 先把当前状态视为 `Web MVP baseline stable`
    - 不要重新讨论页面清单、Sources/AI Settings/Ask 的大方向设计
-   - 优先扩展 Review 的最小结构化审核能力，建议顺序为：
-     - `opportunities`
-     - `risks`
-     - `uncertainties`
-   - 继续保持 Ask 优先消费 reviewed 本地结果的方向，不要先做 advanced RAG
+   - 先修复 `uncertainty_status` 在无自动值场景下的表单默认提交问题：
+     - 当当前值为 `None` 时，页面需要空状态选项，且默认不应隐式提交 `open`
+     - 只有用户显式选择 `open / watching / resolved` 时才应写入人工覆盖
+   - 在这个问题修复后，再决定下一步优先级：
+     - 继续完善 Ask 对 reviewed 结果的展示与消费
+     - 或进入“最小本地存储改造方案”的 Phase 1：Ask history JSON -> local DB
 4. 无论走哪条主线，都不要擅自扩展抓取器能力或重构稳定主链路
 
 ### 给下个会话的明确提示词
@@ -792,7 +899,7 @@
 > 先阅读 `ARCH_CONTEXT.md`、`docs/application_url_batch_workflow.md`、`scripts/real_seed_sources/BASELINE_SEED_STATUS.md`、`scripts/real_seed_sources/SEED_MAINTENANCE_NOTE.md`。  
 > 当前项目已经明确两条主线：内容维护主线，以及网页版 MVP 主线。  
 > 如果当前目标是内容维护：不要重新讨论 CLI/API 最小入口、URL 导入器、seed 目录结构或环境验证闭环；继续围绕 baseline maintenance 与 `what-openai-did` 的 observation-oriented maintenance 推进。  
-> 如果当前目标是网页产品主线：当前应把项目理解为“Web MVP baseline stable”，不要再回到信息架构空谈，不要重开 Sources / AI Settings / Ask 的大方向设计；优先扩展 Review 的最小结构化审核能力，并继续保持 Ask 的 local-retrieval-first 边界。  
+> 如果当前目标是网页产品主线：当前应把项目理解为“Web MVP baseline stable + Review 结构化审核已扩到 opportunities/risks/uncertainties + Ask 已开始优先消费 reviewed evidence”，不要再回到信息架构空谈，也不要重开 Sources / AI Settings / Ask 的大方向设计；优先修复 `uncertainty_status` 在无自动值场景下的页面默认提交问题，然后再决定是继续完善 Ask 结果展示，还是进入 Ask history 本地存储收口。  
 > 无论哪条主线，除非暴露明确回归，否则都不要修改 `orchestrator`、`persistence`、`processing`、`domain`、CLI/API 主路径，也不要扩展抓取器能力。
 ### 最小本地存储改造方案（不动主知识存储）
 
