@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from src.ingestion.schemas import RawDocumentInput
 from src.processing.cleaning import CleaningPipeline
 from src.processing.conflicts import ConflictDetector
 from src.processing.extraction import EntityExtractor, TopicExtractor
 from src.processing.schemas import ProcessingResult
 from src.processing.summarization import SummaryBuilder
+
+if TYPE_CHECKING:
+    from uuid import UUID
+
+    from src.application.persistence import SessionLike
+    from src.application.schemas import ApplicationPipelineResult
 
 
 class ProcessingPipeline:
@@ -42,3 +50,23 @@ class ProcessingPipeline:
         )
         result.conflicts = self.conflict_detector.detect(result)
         return result
+
+
+def run_document_pipeline(
+    document: RawDocumentInput,
+    *,
+    persist: bool = False,
+    include_daily_brief: bool = True,
+    document_id: "UUID | None" = None,
+    session: "SessionLike | None" = None,
+) -> "ApplicationPipelineResult":
+    """Application-layer wrapper kept close to the processing pipeline entry."""
+    from src.application.orchestrator import run_document_pipeline as _run_document_pipeline
+
+    return _run_document_pipeline(
+        document=document,
+        persist=persist,
+        include_daily_brief=include_daily_brief,
+        document_id=document_id,
+        session=session,
+    )

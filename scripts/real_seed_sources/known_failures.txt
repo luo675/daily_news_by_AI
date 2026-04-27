@@ -1,0 +1,3 @@
+# Known-failure samples should stay separate from the formal seed files.
+# Current status: no URL is classified as a known failure in this trial set.
+# Keep this file for future source-specific failures that consistently reproduce in normal network conditions.

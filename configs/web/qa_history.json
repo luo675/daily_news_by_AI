@@ -1,0 +1,117 @@
+[
+  {
+    "id": "a382a9d6-fa83-4936-8c87-610b93181be3",
+    "question": "What changed in AI coding tools this week?",
+    "answer": "Question: What changed in AI coding tools this week?\n\nLocal knowledge does not currently provide enough evidence for a reliable answer.\nEvidence note: Only weak or partial local evidence was found.\n\nPartial local matches:\n- Local Source Import Verification: web regression point 1\n- Web MVP verification document: point one\n\nAdd or review more local sources before relying on external reasoning.",
+    "answer_mode": "insufficient_local_evidence",
+    "provider_name": null,
+    "error": null,
+    "note": "Only weak or partial local evidence was found.",
+    "evidence": [
+      {
+        "document_id": "28f40af2-bc28-4fe6-879e-769e12e83276",
+        "title": "Local Source Import Verification",
+        "source": "Local Web Source 306bbf0b",
+        "summary": "Reviewed via full web regression flow.",
+        "snippet": "web regression point 1",
+        "match_basis": "key_point",
+        "matched_terms": 1,
+        "score": 2,
+        "url": "http://127.0.0.1:8765/article"
+      },
+      {
+        "document_id": "cb30a4c1-ec3a-4cc3-8073-a35f3b8b506a",
+        "title": "Web MVP verification document",
+        "source": null,
+        "summary": "Verified summary from web review flow.",
+        "snippet": "point one",
+        "match_basis": "key_point",
+        "matched_terms": 1,
+        "score": 2,
+        "url": "https://example.com/web-mvp-verification"
+      }
+    ],
+    "created_at": "2026-04-26T09:05:31.849502+00:00"
+  },
+  {
+    "id": "ad953909-6b80-4cf8-94d8-ec757cd5817f",
+    "question": "What changed in coding workflow review discipline?",
+    "answer": "Question: What changed in coding workflow review discipline?\n\nLocal evidence summary:\n- Local Source Import Verification: OpenAI released a new coding workflow update for agentic development teams.  Anthropic responded with tighter review loops and safer deployment discipline.  Teams still need local knowledge retrieval, better observability, and stronger review wo\n- Web MVP verification document: OpenAI and Anthropic both shipped updates for coding workflows. Teams still struggle with deployment visibility, review discipline, and local knowledge retrieval.\n- Schema tightening persist test two: t better observability and deployment controls for agent workflows. Startup tooling remains fragmented.\n\nThis answer is retrieval-first and synthesized locally because no external AI reply was used.",
+    "answer_mode": "local_only",
+    "provider_name": null,
+    "error": null,
+    "evidence": [
+      {
+        "document_id": "28f40af2-bc28-4fe6-879e-769e12e83276",
+        "title": "Local Source Import Verification",
+        "source": "Local Web Source 306bbf0b",
+        "summary": "Reviewed via full web regression flow.",
+        "snippet": "OpenAI released a new coding workflow update for agentic development teams.  Anthropic responded with tighter review loops and safer deployment discipline.  Teams still need local knowledge retrieval, better observability, and stronger review wo",
+        "url": "http://127.0.0.1:8765/article"
+      },
+      {
+        "document_id": "cb30a4c1-ec3a-4cc3-8073-a35f3b8b506a",
+        "title": "Web MVP verification document",
+        "source": null,
+        "summary": "Verified summary from web review flow.",
+        "snippet": "OpenAI and Anthropic both shipped updates for coding workflows. Teams still struggle with deployment visibility, review discipline, and local knowledge retrieval.",
+        "url": "https://example.com/web-mvp-verification"
+      },
+      {
+        "document_id": "cc3900e4-e1fe-40fd-80e9-ccbfa1b594c0",
+        "title": "Schema tightening persist test two",
+        "source": null,
+        "summary": "Summary skeleton: Schema tightening persist test two. Developers want better observability and deployment controls for agent workflows.",
+        "snippet": "t better observability and deployment controls for agent workflows. Startup tooling remains fragmented.",
+        "url": "https://example.com/schema-tighten-persist-2?run_id=20260419b"
+      },
+      {
+        "document_id": "c30c2035-1974-4b39-8080-d9dff22c1d4d",
+        "title": "Schema tightening persist test one",
+        "source": null,
+        "summary": "Summary skeleton: Schema tightening persist test one. OpenAI and Anthropic appear in this document about developer tooling and agent workflows.",
+        "snippet": "OpenAI and Anthropic appear in this document about developer tooling and agent workflows. Teams see product whitespace.",
+        "url": "https://example.com/schema-tighten-persist-1?run_id=20260419b"
+      },
+      {
+        "document_id": "66e8a6da-2057-4323-afc0-db586000c5c2",
+        "title": "Batch tx success two",
+        "source": null,
+        "summary": "Summary skeleton: Batch tx success two. Developers want better observability and deployment controls for agent workflows.",
+        "snippet": "t better observability and deployment controls for agent workflows. Startup tooling remains fragmented.",
+        "url": "https://example.com/batch-tx-success-2?run_id=20260419a"
+      }
+    ],
+    "created_at": "2026-04-26T08:08:13.671335+00:00"
+  },
+  {
+    "id": "f6b74263-47c0-4959-b0df-29619b3e12a7",
+    "question": "What changed in coding workflow review discipline?",
+    "answer": "No local evidence matched the question. Add sources, import documents, or broaden the query before relying on external reasoning.",
+    "answer_mode": "local_only",
+    "provider_name": null,
+    "error": null,
+    "evidence": [],
+    "created_at": "2026-04-26T08:07:41.426189+00:00"
+  },
+  {
+    "id": "92828229-1a43-4a7b-a067-cd37b36fafdb",
+    "question": "What changed in coding workflow review discipline?",
+    "answer": "No local evidence matched the question. Add sources, import documents, or broaden the query before relying on external reasoning.",
+    "answer_mode": "local_only",
+    "provider_name": null,
+    "error": null,
+    "evidence": [],
+    "created_at": "2026-04-26T08:07:31.977231+00:00"
+  },
+  {
+    "id": "38a87506-7589-4ce0-8bdc-8bf52d470f9d",
+    "question": "What changed in coding workflow review discipline?",
+    "answer": "No local evidence matched the question. Add sources, import documents, or broaden the query before relying on external reasoning.",
+    "answer_mode": "local_only",
+    "provider_name": null,
+    "error": null,
+    "evidence": [],
+    "created_at": "2026-04-26T08:07:19.991310+00:00"
+  }
+]

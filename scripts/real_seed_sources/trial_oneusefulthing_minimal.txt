@@ -1,0 +1,7 @@
+# Minimal expansion trial only.
+# Keep formal baseline files unchanged; use this file only for the current 5-item trial run.
+https://simonwillison.net/2024/May/29/training-not-chatting/
+https://simonwillison.net/2024/Dec/31/llms-in-2024/
+https://www.anthropic.com/news/claude-3-5-sonnet
+https://www.anthropic.com/news/announcing-our-updated-responsible-scaling-policy
+https://www.oneusefulthing.org/p/what-openai-did

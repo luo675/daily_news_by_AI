@@ -8,7 +8,17 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.api.routes import search, briefs, opportunities, topics, watchlist, reviews, health
+from src.api.routes import (
+    application_pipeline,
+    search,
+    briefs,
+    opportunities,
+    topics,
+    watchlist,
+    reviews,
+    health,
+    web,
+)
 
 
 def create_app() -> FastAPI:
@@ -35,11 +45,13 @@ def create_app() -> FastAPI:
 
     # ── 注册路由 ──
     app.include_router(search.router, prefix="/api/v1", tags=["search"])
+    app.include_router(application_pipeline.router, prefix="/api/v1", tags=["application"])
     app.include_router(briefs.router, prefix="/api/v1", tags=["briefs"])
     app.include_router(opportunities.router, prefix="/api/v1", tags=["opportunities"])
     app.include_router(topics.router, prefix="/api/v1", tags=["topics"])
     app.include_router(watchlist.router, prefix="/api/v1", tags=["watchlist"])
     app.include_router(reviews.router, prefix="/api/v1", tags=["reviews"])
     app.include_router(health.router, prefix="/api/v1", tags=["health"])
+    app.include_router(web.router)
 
     return app

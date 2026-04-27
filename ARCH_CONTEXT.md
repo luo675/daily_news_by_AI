@@ -5,9 +5,9 @@
 ### 根目录
 
 - `goal.md`
-  - 项目目标与架构初稿
+  - 项目目标与初始架构草稿
 - `ARCH_CONTEXT.md`
-  - 当前最小上下文摘要
+  - 当前最小上下文摘要；新会话优先读取
 - `pyproject.toml`
   - Python 项目配置
 - `alembic.ini`
@@ -24,47 +24,70 @@
 - `task_breakdown.md`
   - 任务拆分
 - `task_cards.md`
-  - 可派发给单独模型的任务卡
+  - 可派发任务卡
 - `api_spec.md`
   - API 草案
 - `testing_strategy.md`
   - 测试与质量策略
 - `review_implementation.md`
-  - 人工修订相关实现文档
+  - 人工修订实现说明
 
 ### 代码目录 `src/`
 
 - `domain/`
   - `base.py`
+  - `enums.py`
   - `models.py`
-  - 第一阶段核心数据模型
+  - 第一阶段核心领域模型与共享枚举
 - `ingestion/`
   - `schemas.py`
   - `source_registry.py`
   - `adapters.py`
   - `validators.py`
-  - 来源注册与统一采集输入骨架
+  - 统一采集输入与来源注册骨架
+- `processing/`
+  - `schemas.py`
+  - `cleaning.py`
+  - `summarization.py`
+  - `extraction.py`
+  - `conflicts.py`
+  - `pipeline.py`
+  - 清洗、摘要、实体/主题抽取、冲突检测骨架
+- `scoring/`
+  - `schemas.py`
+  - `service.py`
+  - 产品机会评分骨架
+- `briefing/`
+  - `schemas.py`
+  - `service.py`
+  - 日报草稿结构与生成骨架
+- `application/`
+  - `schemas.py`
+  - `mappers.py`
+  - `persistence.py`
+  - `orchestrator.py`
+  - 应用层映射、最小持久化、编排入口
 - `watchlist/`
   - `schemas.py`
   - `service.py`
   - `weight.py`
-  - watchlist 骨架
+  - watchlist 服务层
 - `api/`
   - `app.py`
   - `auth.py`
   - `deps.py`
   - `schemas.py`
   - `routes/`
-  - API 骨架
+  - API 骨架与路由
 - `admin/`
   - `review_schemas.py`
   - `review_service.py`
   - `review_service_db.py`
-  - 人工修订骨架
+  - 人工修订服务
 - `config.py`
-  - 数据库和 session 配置
+  - 数据库与 session 配置
 
-### 其他目录
+### 配置与脚本
 
 - `configs/sources/default_sources.yaml`
   - 默认来源配置
@@ -74,33 +97,40 @@
   - `verify_watchlist.py`
   - `verify_api.py`
   - `verify_review.py`
-  - 若干当前验收脚本
+  - `verify_pipeline.py`
+  - `verify_application_flow.py`
+  - 当前主要验收脚本
+
+---
 
 ## 2. 当前需求目标
 
 ### 项目定位
 
 - 项目名：`daily_news`
-- 目标不是普通资讯抓取器，而是一个面向 AI 领域的个人知识数据库
-- 第一阶段按个人使用设计，后续分享成果给其他人
-- 需要支持通用 AI Agent 通过 API 读取知识库
+- 目标不是普通资讯抓取器，而是面向 AI 领域的个人知识数据库
+- 第一阶段按个人使用设计，后续可将结果开放给其他人或 AI Agent 消费
+- 正式产品形态已进一步明确为：本地优先的网页工作台，而不是终端优先工具
+- 正式使用时应以网页为主入口；终端主要保留给维护、验证、批处理和运维
 
-### 核心目标
+### 第一阶段核心目标
 
 - 收集高价值 AI 信息
-- 处理为结构化知识
+- 将原始内容处理为结构化知识
 - 支持检索、串联、问答、日报
-- 支持投资研究辅助
-- 第一阶段优先支持产品机会判断
+- 支持产品机会判断，优先于泛投资研究
+- 提供面向 AI Agent 的结构化 API
+- 为后续网页产品提供本地知识底座、人工修订底座与问答底座
 
 ### 第一阶段重点输出
 
 - 中英双语每日简报
 - 产品机会列表
 - 风险列表
-- 趋势判断
+- 不确定性与冲突提示
 - watchlist 更新
-- 面向 AI Agent 的结构化 API
+- 结构化 API 响应
+- 后续网页工作台所需的可展示、可检索、可修订知识结果
 
 ### 第一阶段优先数据源
 
@@ -128,61 +158,56 @@
   - TechCrunch Equity Podcast
   - TBPN
 
+---
+
 ## 3. 已确定的设计决策
 
 ### 用户与使用方式
 
 - 第一阶段只给个人使用
-- 后续会分享结果给其他人
-- 外部消费对象主要是通用 AI Agent
+- 外部主要消费对象是通用 AI Agent
+- 后续可扩展为多人共享，但当前不做多租户设计
+- 正式产品主入口应为网页后台
+- 外部 AI 应作为可配置 provider 接入，而不是写死到代码逻辑中
+- 数据、配置和人工修订记录应优先保存在本地
 
 ### 输出与语言
 
 - 数据源以英文为主
 - 输出采用中英双语并列
-- 日报第一阶段输出为 Markdown
+- 日报第一阶段输出 Markdown
 - 每天固定生成一份日报
 - 用户可按需额外生成一份最新简报
 
-### 第一阶段主目标
+### 产品机会判断
 
 - 产品机会判断优先于投资研究判断
-- 重点判断两个问题：
+- 重点回答两个问题：
   - 需求是否真实存在
-  - 市场是否还空白
-
-### 产品机会评分
-
-- 评分制：`1-10`
-- `10` 分表示最有创意、最让人眼前一亮
+  - 市场是否仍有空白
 - 默认评分维度：
   - `需求真实性` 30%
   - `市场空白度` 30%
   - `产品化可行性` 20%
   - `跟进优先级` 10%
   - `证据充分度` 10%
+- 冲突会增加不确定性，不应抬高优先级
 
-### 冲突处理
+### 冲突与不确定性
 
 - 优先自动判断
-- 如果判断不了，保留不确定性
-- 输出时明确标注冲突或待确认
+- 判断不了时保留不确定性
+- 输出时明确标记冲突与待确认项
 - 来源可信度必须参与冲突判断
 
 ### 来源可信度
 
-- 需要分级
-- 建议分为 `S / A / B / C`
-- 区分：
-  - 一手来源
-  - 原始发言
-  - 机构原文
-  - 二手整理
-  - 评论和转述
+- 使用 `S / A / B / C`
+- 区分一手来源、原始发言、机构原文、二手整理、评论转述
 
 ### 存储策略
 
-- 第一阶段不强求保存原始全文或网页快照
+- 第一阶段不强求保存网页快照或全文归档
 - 优先保存：
   - 来源链接
   - 元数据
@@ -202,22 +227,13 @@
   - 主题
   - 赛道
   - 关键词
-- 支持两种组织方式：
-  - 按对象类型
-  - 按优先级
-- 支持优先级和分组
+- 支持按对象类型、按优先级组织
 
 ### API
 
-- 第一阶段需要支持外部 AI 通过 API 读取知识库
-- 第一阶段 API 全部开放的范围包括：
-  - 检索结果
-  - 专题聚合结果
-  - 日报
-  - 产品机会判断
-  - 风险与不确定性
-- API 返回必须结构化，便于 Agent 消费
-- 统一返回高层字段建议包括：
+- 第一阶段 API 面向外部 AI Agent
+- API 返回必须结构化
+- 统一高层字段包括：
   - `summary`
   - `evidence`
   - `opportunities`
@@ -226,31 +242,20 @@
   - `related_topics`
   - `watchlist_updates`
   - `meta`
+- 后续网页问答也应优先复用这些结构化结果，而不是绕过本地知识库直接问外部 AI
 
 ### API 鉴权与配额
 
-- 第一阶段鉴权采用单用户密钥
-- 要保留未来升级口子
-- 配额按：
-  - token
-  - 或返回条数
-- 当前主要调用对象是通用 AI Agent
+- 第一阶段使用单用户 API Key
+- 保留后续升级空间
+- 配额按 token 或返回条数控制
 
 ### 人工修订
 
 - 第一阶段必须支持人工修订入口
-- 人工权限最大
 - 人工结果优先于自动结果
-- 支持修订：
-  - 摘要
-  - 标签
-  - 主题
-  - 机会分数
-  - 风险标记
-  - 结论
-  - 优先级
-  - 不确定性标记
 - 需要保留审计记录
+- 数据库不可用时，review API 允许降级到内存服务
 
 ### 技术选型
 
@@ -260,161 +265,624 @@
 - 调度：`Celery` 或 `Prefect`
 - 抓取：`RSS + requests`，必要时 `Playwright`
 - 部署：`Docker Compose`
-- 当前阶段是规划与骨架，不是完整实现
+- 正式产品前端：轻量 Web 后台
+- 外部 AI：provider-based，可配置 API Key / model / task routing
 
-## 4. 当前代码状态
+### 当前已落地的关键架构调整
 
-### 已完成的骨架
+- `api/deps.py` 已改为延迟创建数据库 session，避免导入期硬依赖数据库驱动
+- review API 已支持优先数据库、失败时降级到内存服务
+- `watchlist` API 已接到真实 `WatchlistService`
+- 共享枚举已抽到 `src/domain/enums.py`
+- 处理流水线骨架已补齐：
+  - 清洗与去重
+  - 双语摘要
+  - 实体抽取
+  - 主题归类
+  - 冲突检测
+  - 机会评分
+  - 日报生成
+- 应用层已补齐：
+  - pipeline 输出到 domain model 的 mapper
+  - 最小持久化服务
+  - `run_document_pipeline(...)` 编排入口
 
-- 数据模型骨架
-- 来源注册与统一采集输入结构
-- watchlist 服务层骨架
-- API 路由骨架
-- 人工修订服务骨架
+### 当前验证状态
 
-### 当前验证结果
-
-- 通过：
+- 已通过：
   - `scripts/verify_models.py`
   - `scripts/verify_ingestion.py`
   - `scripts/verify_watchlist.py`
-- 失败：
   - `scripts/verify_api.py`
   - `scripts/verify_review.py`
+  - `scripts/verify_pipeline.py`
+  - `scripts/verify_application_flow.py`
+  - `scripts/verify_application_persistence_db.py`
+- 其中：
+  - `verify_application_flow.py` 已覆盖 memory 路径
+  - `verify_application_persistence_db.py` 已覆盖真实 SQLAlchemy Session 路径
+  - PostgreSQL 真环境已实证通过一次，不再只是 SQLite fallback 验证
 
-## 5. 未解决的问题
+---
 
-### 问题 1：API 导入时强依赖数据库驱动
+## 4. 当前阶段结论与剩余问题
 
-- 现象：
-  - `verify_api.py` 和 `verify_review.py` 失败
-  - 报错：`ModuleNotFoundError: No module named 'psycopg2'`
-- 根因：
-  - `src/api/deps.py` 在模块导入时立即创建 `SessionLocal`
-  - `src/config.py` 强制使用 `postgresql+psycopg2`
-  - `pyproject.toml` 没有 `psycopg2` 依赖
-- 影响：
-  - API 骨架本身不可导入
-  - reviews 路由拖垮整个 API
+### 当前阶段结论：Application Persistence Reuse Stabilization 已完成
 
-### 问题 2：watchlist API 仍是占位实现
+- `src/application/persistence.py` 已成为实体/主题复用的唯一入口
+- Entity 复用键已按 `entity_type + name`
+- Topic 复用键已按：
+  - 优先 `name_en`
+  - 若 `name_en` 为空则回退 `name_zh`
+  - 统一 `strip().lower()`
+- `DocumentEntity.entity_id` / `DocumentTopic.topic_id` 会回写为最终复用后的主记录 ID
+- 同一文档内重复关联已在持久化前去重：
+  - `DocumentEntity`: `(document_id, entity_id)`
+  - `DocumentTopic`: `(document_id, topic_id)`
+- MemorySession 与真实 SQLAlchemy Session 两条路径均已验证通过
 
-- `src/watchlist/service.py` 已实现
-- 但 `src/api/routes/watchlist.py` 的 GET/POST 仍返回空数组
-- API 未真正接上 watchlist 服务
+### 本次阶段性实证结果
 
-### 问题 3：数据库版人工修订服务有运行时错误
+- `scripts/verify_application_flow.py` 已通过
+- `scripts/verify_application_persistence_db.py` 已通过
+- PostgreSQL 真环境已明确通过一次，输出为 `Database mode: PostgreSQL`
+- 已确认无以下唯一约束冲突：
+  - `uq_entities_type_name`
+  - `uq_doc_entities_doc_entity`
+  - `uq_doc_topics_doc_topic`
+- DB 验证脚本已支持重复运行
 
-- `src/admin/review_service_db.py` 的 `count()` 写法错误
-- 使用了 `select(...).count()` 这种无效方式
-- 真正运行时会炸
+### DB 验证脚本当前已具备的能力
 
-### 问题 4：领域枚举定义重复
+- 为每次运行生成唯一 `run_id`
+- 测试文档 `title/url` 使用 run-scoped 值，避免撞历史数据
+- 对处理结果中的 entity/topic link 增加非空前置断言，避免直接下标报错
+- PostgreSQL 路径下会精确清理本次 run 创建的测试数据
+- 额外补上了本次 run 新建 `Entity` / `Topic` 主记录的回收逻辑
+- 清理策略仅按本次 run 记录的 ID 精确删除，不按 name 宽删
 
-- `domain.models`
-- `ingestion.schemas`
-- `watchlist.schemas`
-- 多处重复定义相同概念
-- 后续容易漂移
+### 本地 PostgreSQL 验证前置条件
 
-### 问题 5：编码乱码
+- `src/config.py` 读取以下环境变量：
+  - `DB_HOST`
+  - `DB_PORT`
+  - `DB_NAME`
+  - `DB_USER`
+  - `DB_PASSWORD`
+- 当前本地验证依赖：
+  - PostgreSQL 可连接
+  - `psycopg2` 可用
+  - `daily_news` 数据库存在
+  - `pgvector` 已安装并已执行 `CREATE EXTENSION vector`
+- 若密码错误或扩展未安装，`verify_application_persistence_db.py` 会回退 SQLite
 
-- `pyproject.toml` 描述乱码
-- 多个 Python 文件注释乱码
-- 当前主要影响可维护性和元数据质量
+### 当前剩余问题
 
-## 6. 已给出的修改方向
+- 当前阶段主问题已收尾，不再继续扩散修改 persistence
+- 本节属于较早阶段结论，后续真实进展以第 6 节“最新阶段增量说明”为准
+- 其中以下事项已在后续阶段完成：
+  - application pipeline 最小批处理入口
+  - application pipeline 最小 API 入口
+  - 最小 URL 外部输入链路
+  - baseline maintenance 与单候选试跑闭环
+- 当前真正未收尾的事项已不再是“搭入口”，而是：
+  - 继续执行 observation-oriented maintenance
+  - 对 `what-openai-did` 再观察一个 cycle
+  - 在不改架构的前提下决定其是否进入更明确的 promotion 讨论
 
-### 修改方向 A：修复 API 启动期硬依赖
+---
 
-- 目标：
-  - API 可以在未连接数据库或未安装 `psycopg2` 时仍能导入
-- 要点：
-  - 不要在模块导入期创建 session factory
-  - 数据库依赖改为延迟初始化
-  - 只在真正用到时建立连接
-  - 必要时补依赖，或改成更一致的驱动方案
+## 5. 当前阶段状态与下一步
 
-### 修改方向 B：把 watchlist API 真正接到 watchlist 服务
+### 当前阶段结论：最小人工喂数基线建立完成
 
-- 目标：
-  - `GET /watchlist`
-  - `POST /watchlist`
-  - 不再返回空壳
-- 要点：
-  - 复用已有 watchlist service
-  - 返回 grouped_by_type 和 grouped_by_priority
-  - 处理重复项和非法输入
+这一小阶段已经完成，可以明确视为 `Manual Feeding Workflow Baseline Established`。
 
-### 修改方向 C：修复数据库版人工修订服务
+本阶段已经完成的闭环包括：
+- 最小 URL 列表批量导入可用
+- seed 目录组织方式落地
+- 操作员约定与工作流文档补齐
+- 首次真实人工喂数 trial 已完成
+- seed 分类清理已完成
+- 极小扩容 maintenance trial 已完成
+- baseline 状态已记录，不再只是口头约定
 
-- 目标：
-  - 数据库版 review service 至少达到可运行状态
-- 要点：
-  - 修复 `count()`
-  - 检查 `get_history`
-  - 检查 `_get_latest_edit`
-  - 检查 `revert_edit`
-  - 检查批量事务行为
+### 新增产品方向结论：正式使用形态已明确
 
-### 修改方向 D：统一领域枚举
+当前已新增明确的产品方向约束，后续新会话不应再默认把项目理解为“终端优先工具”，而应理解为“网页优先、本地存储优先、外部 AI 可配置”的本地知识工作台。
 
-- 目标：
-  - 消除重复枚举定义
-- 要点：
-  - 统一单一来源
-  - ingestion/watchlist 优先复用 domain 层或 shared enum
-  - 避免循环依赖
+已确认的正式产品形态：
+- 正式使用时以网页为主入口
+- 用户可在网页中配置资料来源
+- 用户可在网页中配置外部 AI Provider 与 API Key
+- 外部 AI 用于分析、摘要、问答等任务，但知识资产保留在本地
+- 终端入口继续保留，但主要用于维护、验证、批处理与运维
 
-### 修改方向 E：修复编码和项目元数据乱码
+网页版 MVP 最小页面范围：
+- Dashboard
+- Sources
+- Documents / Knowledge
+- Review
+- Watchlist
+- Ask / Q&A
+- AI Settings
+- System / Storage
 
-- 目标：
-  - 文件统一 UTF-8
-  - 修复包描述和关键注释乱码
+网页版 MVP 的核心能力要求：
+- 网页中配置来源
+- 网页中配置外部 AI Provider
+- 浏览已处理知识结果
+- 支持人工修订
+- 支持基于本地知识库的问答
+- 本地保存数据、配置与人工修订结果
 
-## 7. 后续执行步骤（todo list）
+网页版 MVP 明确非目标：
+- 当前不要求多人协作
+- 当前不要求复杂权限系统
+- 当前不要求自动发现来源或通用爬虫能力
+- 当前不要求复杂前端交互与完整运维后台
 
-### 第一优先级
+### 当前 formal seed baseline
 
-- [ ] 修复 API 导入阶段的数据库硬依赖
-- [ ] 让 `scripts/verify_api.py` 可以通过
-- [ ] 让 `scripts/verify_review.py` 至少能跑到 review 模块本身
+当前 formal seed 已固定为下一轮 maintenance cycle 的 baseline set：
+- `https://simonwillison.net/2024/May/29/training-not-chatting/`
+- `https://simonwillison.net/2024/Dec/31/llms-in-2024/`
+- `https://www.anthropic.com/news/claude-3-5-sonnet`
+- `https://www.anthropic.com/news/announcing-our-updated-responsible-scaling-policy`
 
-### 第二优先级
+相关记录文件：
+- `scripts/real_seed_sources/BASELINE_SEED_STATUS.md`
+- `scripts/real_seed_sources/SEED_MAINTENANCE_NOTE.md`
 
-- [ ] 修复 `DatabaseReviewService.count()` 和其他明显运行时错误
-- [ ] 确保数据库版 review service 可稳定运行
+### 当前 deferred candidates
 
-### 第三优先级
+以下候选继续保持 deferred，不在当前阶段自动纳入 formal seed：
+- `https://www.oneusefulthing.org/p/what-openai-did`
+- `https://www.anthropic.com/news/a-new-initiative-for-developing-third-party-model-evaluations/`
 
-- [ ] 将 watchlist API 接入 watchlist service
-- [ ] 让 API 层真实暴露 watchlist 数据
+### 当前明确不再成立的旧判断
 
-### 第四优先级
+- OpenAI `https://openai.com/index/hello-gpt-4o/` 不再归类为 `known failure`
+- 但当前也没有被提升为 formal seed
+- 该 URL 如需重新纳入，应在后续 maintenance cycle 中重新观察，而不是基于单次成功直接升级
 
-- [ ] 消除 ingestion/watchlist/domain 中重复的枚举定义
-- [ ] 修复编码乱码
+### 下一轮 maintenance cycle 的起点
 
-### 第五优先级
+下一轮不要从“继续建入口”或“继续扩抓取能力”起手，而应从 baseline maintenance 起手：
 
-- [ ] 开始第二批实现任务：
-  - 清洗与去重规则
-  - 双语摘要结构
-  - 实体抽取结构
-  - 主题抽取结构
-  - 冲突检测规则
-  - 产品机会评分骨架
-  - 日报生成骨架
+1. 先原样复跑当前 formal seed baseline
+2. 判断 baseline 是否继续稳定
+3. 只有在 baseline 再稳定通过一个 cycle 之后，再考虑 deferred candidates
 
-## 8. 新会话继续时建议先读的文件
+### 当前阶段不应再做的事
 
+- 不要重新开启 CLI / API 最小入口建设
+- 不要重新讨论“要不要做单 URL 导入”或“要不要做目录 seed”
+- 不要继续扩种子列表，只因为最近几轮 trial 成功
+- 不要把 seed 维护扩展成 source registry / 平台化来源管理
+- 不要扩展抓取器到 Playwright、403 绕过、JS 渲染抓取
+- 不要重构 `orchestrator` / `persistence` / `processing` / `domain`
+
+---
+
+## 6. 最新阶段增量说明（供新会话优先对齐）
+
+本节是当前真实状态的最新增量上下文。新会话应优先以本节为主，不要回到已经完成的旧阶段任务。
+
+### 已完成阶段 A：Application Persistence Reuse Stabilization
+
+这一阶段已经完成，不要重新开启，除非出现明确回归。
+
+已确认事实：
+- `src/application/persistence.py` 已是 entity/topic 复用唯一入口
+- Entity 复用键：`entity_type + name`
+- Topic 复用键：
+  - 优先 `name_en`
+  - 若 `name_en` 为空则回退 `name_zh`
+  - 统一使用 `strip().lower()`
+- `DocumentEntity.entity_id` / `DocumentTopic.topic_id` 会回写为最终复用后的主记录 ID
+- 同一文档内重复关联已在持久化前去重：
+  - `DocumentEntity`: `(document_id, entity_id)`
+  - `DocumentTopic`: `(document_id, topic_id)`
+- 以下两条路径都已验证通过：
+  - `MemorySession`
+  - 真实 SQLAlchemy `Session`
+
+### 已完成阶段 B：最小批处理 CLI 入口
+
+这一阶段已经完成。
+
+关键事实：
+- `scripts/run_application_batch.py` 是当前最小 CLI 入口
+- 支持 JSON 文件、`--url` 单 URL、`--url-list`
+- 直接复用 `DocumentPipelineOrchestrator.run_document_pipeline(...)`
+- 输出保持最小结构化结果
+- 事务语义保持 `per_document`
+
+### 已完成阶段 C：最小 API 入口
+
+这一阶段已经完成。
+
+关键事实：
+- `POST /api/v1/application/pipeline/run` 可直接触发 application orchestrator
+- route 只做薄编排，不复制 persistence 逻辑
+- `persist=false` 不建 DB session，`persist=true` 复用 `src/api/deps.py`
+- 成功/错误路径都已验证过
+
+### 已完成阶段 D：真实 PostgreSQL + pgvector 验证闭环
+
+这一阶段已经完成。
+
+关键事实：
+- `verify_application_persistence_db.py` 已去掉 SQLite fallback
+- `verify_application_api.py` 已去掉 `persist=true` skip
+- PostgreSQL 与 `pgvector` 在真实环境下已验证通过
+- 当前不要再把“环境验证闭环”当主线任务
+
+### 已完成阶段 E：最小 URL 外部输入链路
+
+这一阶段已经完成。
+
+关键事实：
+- `src/ingestion/url_importer.py` 已支持最薄单页 HTML 导入
+- `scripts/run_application_batch.py` 已支持 `--url` 与 `--url-list`
+- `--url-list` 现已支持：
+  - 单文件 `.txt`
+  - 单文件 `.json`
+  - seed 目录输入
+- 目录模式只是一层薄的输入组织约定，不是 source registry
+- 目录内按文件名排序加载，URL 去重规则为 `first occurrence wins`
+
+### 已完成阶段 F：人工喂数工作流收口与 baseline 建立
+
+这一阶段是当前最新完成的小阶段，新会话应优先对齐这里。
+
+已完成事实：
+- `docs/application_url_batch_workflow.md` 已补齐操作员使用约定
+- `scripts/real_seed_sources/` 已形成真实人工喂数目录
+- 首次真实 manual feeding trial 已在可联网环境完成
+- 后续极小扩容 maintenance trial 也已完成
+- 当前 formal seed baseline 已记录在：
+  - `scripts/real_seed_sources/BASELINE_SEED_STATUS.md`
+- 当前 seed 分类修正与维护说明已记录在：
+  - `scripts/real_seed_sources/SEED_MAINTENANCE_NOTE.md`
+
+当前 formal seed baseline：
+- `https://simonwillison.net/2024/May/29/training-not-chatting/`
+- `https://simonwillison.net/2024/Dec/31/llms-in-2024/`
+- `https://www.anthropic.com/news/claude-3-5-sonnet`
+- `https://www.anthropic.com/news/announcing-our-updated-responsible-scaling-policy`
+
+当前 deferred candidates：
+- `https://www.oneusefulthing.org/p/what-openai-did`
+- `https://www.anthropic.com/news/a-new-initiative-for-developing-third-party-model-evaluations/`
+
+已明确不要误判：
+- OpenAI `hello-gpt-4o` 当前不再视为 `known failure`
+- 但当前也不是 formal seed
+- 当前阶段结论不是“继续扩种子”，而是“baseline 已建立”
+
+### 已完成阶段 G：baseline maintenance 复跑与单候选试跑评审
+
+这是在 baseline 建立之后新增完成的最新进度，新会话应优先参考这里判断下一步，而不是回到“是否继续搭入口”。
+
+已完成事实：
+- 2026-04-21 已完成一次 formal seed baseline maintenance rerun
+- baseline 复跑命令继续复用现有薄入口：
+  - `.\.venv\Scripts\python.exe scripts\run_application_batch.py --url-list scripts\real_seed_sources --no-persist`
+- 受限环境下曾出现一次网络型 transient failure（WinError 10013），已确认不是代码回归
+- 在可联网环境下原样复跑通过，结果为 `total=4, succeeded=4, failed=0`
+- 已确认当前 workflow 稳定，且当前阶段不需要实现层修复
+- `scripts/real_seed_sources/BASELINE_SEED_STATUS.md` 已更新为 2026-04-21 的 baseline rerun 记录
+
+单候选极小扩容 trial：
+- trial candidate：`https://www.oneusefulthing.org/p/what-openai-did`
+- 本轮 trial 只新增了一个试跑输入文件：
+  - `scripts/real_seed_sources/trial_oneusefulthing_minimal.txt`
+- trial 复用命令：
+  - `.\.venv\Scripts\python.exe scripts\run_application_batch.py --url-list scripts\real_seed_sources\trial_oneusefulthing_minimal.txt --no-persist`
+- 试跑结果为 `total=5, succeeded=5, failed=0`
+- 该 candidate 在当前 thin HTML importer 边界内可运行，没有破坏 baseline 稳定性
+- trial 记录已写入：
+  - `scripts/real_seed_sources/SEED_MAINTENANCE_NOTE.md`
+
+对 `what-openai-did` 的人工结果评审结论：
+- 当前结论不是 formal seed promotion
+- 当前结论也不再是“仅仅 keep deferred、没有观察价值”
+- 当前正式判断应视为：
+  - `eligible for future promotion after another cycle`
+- 该 candidate 已证明：
+  - 能稳定落入项目关心的 AI 主题范围
+  - 能产出至少一个具备跟踪价值的 opportunity draft
+  - 能产出可供人工继续判断的 open question
+  - 能提供对下游 agent 有基础价值的 topics / entities
+- 当前主要质量问题：
+  - 实体抽取存在明显噪声，例如 `But`
+  - opportunity 输出可用但偏模板化
+  - risk 信号偏弱
+  - related_topics 略显宽泛，个别主题相关性偏弱
+- 因此，这条 candidate 的状态应理解为：
+  - 已从“仅能跑通的 deferred candidate”提升为“可进入未来 promotion 观察区间”
+  - 但尚未达到“可直接纳入 formal seed”标准
+
+下一轮 maintenance decision 的正确焦点：
+- 继续只观察 `what-openai-did`
+- 不要在下一轮同时推进第二个 deferred candidate
+- 重点复核三类信号：
+  - 实体噪声是否仍明显存在，尤其是 `But` 这类低质量项
+  - `opportunities / risks / open questions` 是否仍有基本可读性与判断价值
+  - `related_topics` 是否继续稳定落在项目关心的 AI 主题范围内
+- 只有在再观察一个 cycle 后仍稳定，才进入更明确的 promotion 讨论
+
+### 已完成阶段 H：网页版 MVP 主链最小落地与回归收口
+
+这一阶段已经完成，当前不应再把网页版理解为“仅有目标、尚未实施”。后续新会话如果进入网页产品主线，应把当前状态理解为：最小 Web MVP 已落地，并已完成一轮主链回归收口。
+
+已确认事实：
+- FastAPI 内已接入服务端渲染的 Web MVP 页面
+- 当前 8 个已同意的 MVP 页面均已存在并可访问：
+  - Dashboard
+  - Sources
+  - Documents / Knowledge
+  - Review
+  - Watchlist
+  - Ask / Q&A
+  - AI Settings
+  - System / Storage
+- Web 层未重构 `orchestrator` / `persistence` / `processing` / `domain`
+- Web 层继续复用现有 application pipeline、review service 与本地存储边界
+
+当前网页版 MVP 范围：
+- Dashboard：查看最近处理结果、日报、机会、风险与系统状态
+- Sources：管理资料来源
+- Documents / Knowledge：浏览结构化知识结果
+- Review：人工修订自动结果
+- Watchlist：管理关注对象
+- Ask / Q&A：基于本地知识库提问，再调用外部 AI 生成回答
+- AI Settings：配置 provider、API Key、模型与任务用途
+- System / Storage：查看本地存储状态与基础系统信息
+
+该阶段已经实际落地并验证的最小闭环包括：
+- Sources
+  - 可创建 source
+  - 可编辑 source
+  - 可启停 source
+  - 可执行 import now
+  - `maintenance_status / notes / last_import_at / last_result` 当前作为 `Source.config["_web"]` 元数据承载
+  - `formal_seed` 在普通 Web 编辑中保持“可见但不可直接编辑/提升”的语义
+- Documents / Knowledge
+  - 可浏览文档列表与详情
+  - 可查看 source 关联、summary、key points、entities、topics 与正文预览
+- Review
+  - 当前最小审核闭环已覆盖 `summary_zh / summary_en / key_points`
+  - review edits 可真实写入并保留审计记录
+- AI Settings
+  - 当前 provider 配置为本地优先
+  - 已支持最小 provider 对象：`name / provider_type / base_url / api_key / model / is_enabled / is_default / supported_tasks / notes / last_test_status / last_test_message`
+  - 当前 `provider_type` 仅支持 `openai_compatible`
+  - 已支持 provider detail/edit 与最小 test provider 动作
+  - provider 仍保存在本地 JSON，中短期不视为回归问题
+  - provider detail 页不再回显明文 API key
+- Ask / Q&A
+  - 当前已形成 `local retrieval first` 的最小问答链路
+  - Ask provider 选择已按 `enabled + supports qa` 收敛
+  - Ask 结果当前已明确区分：
+    - `local_only`
+    - `local_with_external_reasoning`
+    - `local_fallback`
+    - `insufficient_local_evidence`
+  - 外部 AI 只能消费“问题 + 已选本地证据”，不应裸转发用户问题
+  - Ask 检索当前已做最小稳定化：
+    - query token 去重
+    - 小型 stopword 过滤
+    - 相关性优先、时间次之排序
+    - 证据数量与候选检查数量有上限
+    - 用户可见证据优先采用本地 summary / key points
+  - Ask 当前仍不是向量检索，也不是 advanced RAG
+- Dashboard / System
+  - 已能展示近期文档、topic、provider、Q&A 历史与基础系统状态
+
+该阶段已完成的回归收口结论：
+- 当前 Web MVP 主链已完成一轮正式回归，未发现新的明确回归
+- 已验证的主链包括：
+  - Sources -> Import -> Documents -> Review -> Ask
+  - AI Settings -> provider test -> Ask provider selection
+- Ask 自动化测试当前已通过，回归结论可视为：
+  - `Web MVP baseline stable`
+
+当前 Web MVP 可以真实宣称：
+- 提供本地优先的个人知识工作台网页入口
+- 支持 Sources、Documents、Review、Watchlist、Ask、AI Settings、System 基本链路
+- Ask 会先做本地检索，再按条件选择是否使用外部 AI 做受限推理
+- 人工 review 后的本地字段优先于低信任自动结果
+- AI provider 可本地配置、测试，并按 task 能力用于 Ask
+
+当前 Web MVP 仍不能真实宣称：
+- 先进语义检索或向量 RAG
+- 自主研究 / 多跳推理系统
+- 安全级别较高的 secrets 管理
+- 外部 AI 作为知识源的开放式问答
+- 完整生产级数据治理或爬取平台
+
+### 当前真实稳定边界
+
+截至当前阶段，以下边界已经形成并应继续保持：
+- `src/application/orchestrator.py` 是 application pipeline 正确编排入口
+- `src/application/persistence.py` 是 entity/topic 复用唯一入口
+- CLI 和 API 都必须直接复用 orchestrator
+- CLI 和 API 都只应作为薄入口层
+- URL importer 的定位仍是“最薄 HTML 导入器”，不是通用爬虫
+- `--url-list` 的目录模式是输入组织方式，不是新 ingestion 主路径
+- 批处理继续保持 `per_document` 语义
+- 当前 formal seed 已可作为 baseline set 周期性复跑
+- Web 层当前主要落在：
+  - `src/web/service.py`
+  - `src/api/routes/web.py`
+- AI provider 当前仍为本地 JSON 存储，Ask history 也为本地 JSON 存储；这在当前 MVP 中是有意保留的最小实现，不应被误判为需要立即 DB 化的缺陷
+- `Source.config["_web"]` 当前承担 Web 维护元数据承载职责；这在当前 MVP 中可接受，不应为了字段“更漂亮”而立即重构 domain/schema
+
+### 当前通常不应再动的区域
+
+除非出现明确回归或新的明确需求，否则不要优先修改：
+- `src/application/persistence.py`
+- `src/application/orchestrator.py`
+- `src/domain/*`
+- `src/processing/*`
+- 已稳定的 CLI / API 主路径
+- 当前 `url_importer` 的能力边界
+- 已形成的 seed 目录工作流结构
+- 当前 Ask 的“local retrieval first + bounded evidence + optional external reasoning”边界
+- 当前 Sources 中 `formal_seed` 的普通 Web 只读语义
+
+不要重复做：
+- 不要再回头收尾 environment validation
+- 不要再重构 entity/topic 复用逻辑
+- 不要再重新建设最小 CLI / API 入口
+- 不要因为成功几轮 trial 就扩成来源管理平台
+- 不要引入 `Playwright`
+- 不要扩成通用爬虫系统
+
+### 新会话建议优先阅读
+
+新会话开始后，建议优先阅读这些文件：
 - `ARCH_CONTEXT.md`
-- `goal.md`
-- `docs/project_overview.md`
-- `docs/architecture.md`
-- `docs/task_cards.md`
-- `docs/api_spec.md`
+- `docs/application_url_batch_workflow.md`
+- `scripts/real_seed_sources/BASELINE_SEED_STATUS.md`
+- `scripts/real_seed_sources/SEED_MAINTENANCE_NOTE.md`
+- `src/web/service.py`
+- `src/api/routes/web.py`
+- `scripts/run_application_batch.py`
+- `src/ingestion/url_importer.py`
+- `src/application/orchestrator.py`
+- `src/application/persistence.py`
 
-## 9. 新会话建议的第一句话
+如果需要补充验证上下文，再读：
+- `scripts/verify_application_persistence_db.py`
+- `scripts/verify_application_api.py`
+- `scripts/verify_application_url_import.py`
+- `scripts/verify_application_url_list_import.py`
 
-- 先读取 `ARCH_CONTEXT.md`、`docs/task_cards.md` 和当前相关代码，再继续修复第一优先级问题。
+### 下个会话最合理的工作起点
+
+下个会话不应再从“搭工作流”起手，也不应直接写代码；当前最合理的起点有两条，取决于会话目标：
+
+- 如果继续沿当前内容维护主线推进：基于最新试跑与评审结论，准备下一轮 observation-oriented maintenance
+- 如果继续沿当前网页产品主线推进：不要再回到信息架构空谈，应从“已稳定 Web MVP 的下一块最小能力扩展”起手；当前最合理的下一块是扩展 Review 的最小结构化审核能力，而不是继续扩 Sources / AI Settings / Ask 的大方向
+
+推荐起手顺序：
+1. 先确认当前是走“内容维护主线”还是“网页版 MVP 规划主线”
+2. 如果走内容维护主线：
+   - 确认当前 formal seed baseline 与 deferred 列表
+   - 明确 `what-openai-did` 当前状态是 `eligible for future promotion after another cycle`
+   - 下一轮 maintenance 中继续复跑 baseline，并只额外观察这一条 candidate
+3. 如果走网页版 MVP 主线：
+   - 先把当前状态视为 `Web MVP baseline stable`
+   - 不要重新讨论页面清单、Sources/AI Settings/Ask 的大方向设计
+   - 优先扩展 Review 的最小结构化审核能力，建议顺序为：
+     - `opportunities`
+     - `risks`
+     - `uncertainties`
+   - 继续保持 Ask 优先消费 reviewed 本地结果的方向，不要先做 advanced RAG
+4. 无论走哪条主线，都不要擅自扩展抓取器能力或重构稳定主链路
+
+### 给下个会话的明确提示词
+
+可以直接把下面这段作为下个对话的起手提示：
+
+> 先阅读 `ARCH_CONTEXT.md`、`docs/application_url_batch_workflow.md`、`scripts/real_seed_sources/BASELINE_SEED_STATUS.md`、`scripts/real_seed_sources/SEED_MAINTENANCE_NOTE.md`。  
+> 当前项目已经明确两条主线：内容维护主线，以及网页版 MVP 主线。  
+> 如果当前目标是内容维护：不要重新讨论 CLI/API 最小入口、URL 导入器、seed 目录结构或环境验证闭环；继续围绕 baseline maintenance 与 `what-openai-did` 的 observation-oriented maintenance 推进。  
+> 如果当前目标是网页产品主线：当前应把项目理解为“Web MVP baseline stable”，不要再回到信息架构空谈，不要重开 Sources / AI Settings / Ask 的大方向设计；优先扩展 Review 的最小结构化审核能力，并继续保持 Ask 的 local-retrieval-first 边界。  
+> 无论哪条主线，除非暴露明确回归，否则都不要修改 `orchestrator`、`persistence`、`processing`、`domain`、CLI/API 主路径，也不要扩展抓取器能力。
+### 最小本地存储改造方案（不动主知识存储）
+
+这个方向可以作为当前 `Web MVP baseline stable` 之后的一个小型架构改良主题，但它的性质是“补充型本地存储收口”，不是“替换主知识存储”。后续会话如果接这个方向，应先固定边界：
+- 不动 `src/application/orchestrator.py`
+- 不动 `src/application/persistence.py`
+- 不动 `src/domain/*`
+- 不动 `src/processing/*`
+- 不替换当前 PostgreSQL + pgvector 主知识存储路径
+- 不引入新的“可插拔主知识引擎”或跨语言存储内核
+
+当前要解决的不是“主数据库不够用”，而是 Web MVP 周边本地存储还比较分散，存在一些 MVP 时期的 JSON/临时元数据承载方式。它们当前可用，但不利于后续：
+- 历史记录查询
+- 回归验证一致性
+- 页面级本地审计
+- 存储边界清晰化
+
+当前已识别的周边本地存储对象：
+- `configs/web/qa_history.json`
+  - 当前是 Ask history 的本地 JSON 存储
+  - 这是最适合先收口到 local DB 的目标，因为它独立、低风险、不牵动主知识模型
+- `configs/web/ai_settings.json`
+  - 当前是 AI provider config 的本地 JSON 存储
+  - 当前 MVP 可接受，但不应长期作为唯一正式配置存储边界
+- `Source.config["_web"]`
+  - 当前承担 Sources 页面 maintenance metadata 承载职责
+  - 当前继续保留，不作为优先改造目标
+- 原始资产 / 快照 / 附件存储
+  - 当前还没有正式抽象边界
+  - 后续如需要支持 HTML snapshot / PDF / image / raw asset，可单独定义最小 local asset storage 边界
+
+推荐的最小本地存储改造顺序：
+
+1. Phase 1：Ask history JSON -> local DB
+- 目标：把 Ask history 从零散文件收口到更稳定的本地持久化
+- 只动 Ask history，不动 document / summary / entity / topic / review 主知识对象
+- 最小承载字段可包括：
+  - `question`
+  - `answer`
+  - `answer_mode`
+  - `provider_name`
+  - `evidence`
+  - `error`
+  - `note`
+  - `created_at`
+- 这一步的价值在于：
+  - 更稳定的历史查询
+  - 更明确的本地审计
+  - 更容易做 Ask 页面历史展示和回归验证
+
+2. Phase 2：AI provider config JSON -> local DB
+- 目标：把 provider 配置从本地 JSON 收口到本地配置存储
+- 仍保持：
+  - local-first
+  - single-user
+  - provider-based
+  - external AI as compute only
+- 这一阶段只改配置存储边界，不顺便重做：
+  - provider routing
+  - Ask flow
+  - 外部 AI 调用策略
+- API key 在当前阶段仍可接受“本地存储 + 基本 UI 遮罩/不回显明文”的处理，不要把它升级成复杂 secrets-management 项目
+
+3. Phase 3：定义最小 local asset storage 边界（可先只写 design note）
+- 目标：为后续可能引入的原文快照、PDF、图片、原始 HTML、原始资产保留做边界准备
+- 推荐只定义最小接口，例如：
+  - `save_asset(...)`
+  - `read_asset(...)`
+  - `delete_asset(...)`
+  - `exists_asset(...)`
+- 第一阶段只考虑 `local` backend
+- 不要现在就做 S3 / Supabase / 多后端平台化
+
+当前明确非目标：
+- 不要替换主知识存储
+- 不要引入新的主知识引擎抽象层
+- 不要把类似 `gbrain` 的 `page / compiled_truth / timeline` 数据模型迁入 `daily_news`
+- 不要为了存储“更漂亮”而动 `orchestrator` / `persistence` / `domain`
+- 不要现在强行把 `Source.config["_web"]` 升级为正式 schema 列
+
+如果后续会话要执行这个方向，最合理的顺序是：
+1. 先确认这是“周边本地存储收口”，不是主存储替换
+2. 先做 Ask history 收口
+3. 再做 AI provider config 收口
+4. 最后才判断是否需要为 raw assets / snapshots 单独设计 local asset storage
+
+给下一个接手 AI 的执行提示：
+> 当前“本地存储改造”只针对 Web 周边本地存储，不针对核心知识存储。  
+> 第一优先级是 `configs/web/qa_history.json` 的 JSON -> local DB 收口。  
+> 第二优先级才是 `configs/web/ai_settings.json` 的 JSON -> local DB 收口。  
+> `Source.config["_web"]` 当前继续保留，不是优先改造目标。  
+> 不要把这个任务扩成“替换主存储模式”或“引入新的主知识引擎”。  
+> 如未来要支持 HTML snapshot / PDF / image / raw asset，再单独定义最小 local asset storage 边界。

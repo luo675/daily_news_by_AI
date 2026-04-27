@@ -1,0 +1,4 @@
+# First real manual-feeding trial: model lab announcement/article pages.
+# Keep this file intentionally small for workflow validation.
+https://www.anthropic.com/news/claude-3-5-sonnet
+https://www.anthropic.com/news/announcing-our-updated-responsible-scaling-policy

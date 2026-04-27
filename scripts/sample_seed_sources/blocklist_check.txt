@@ -1,0 +1,5 @@
+# Keep one expected-failure sample to verify per_document isolation in the seed-directory workflow.
+https://openai.com/index/hello-gpt-4o/
+
+# Duplicate entries are allowed across seed files and will be de-duplicated by first occurrence.
+https://simonwillison.net/2024/May/29/training-not-chatting/

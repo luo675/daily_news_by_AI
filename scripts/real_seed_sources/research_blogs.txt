@@ -1,0 +1,4 @@
+# First real manual-feeding trial: research/blog-style English article pages.
+# Keep this file intentionally small for workflow validation.
+https://simonwillison.net/2024/May/29/training-not-chatting/
+https://simonwillison.net/2024/Dec/31/llms-in-2024/

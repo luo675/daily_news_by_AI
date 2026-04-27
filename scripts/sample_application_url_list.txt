@@ -1,0 +1,6 @@
+# Static or mostly static English article pages that fit the minimal URL importer.
+https://simonwillison.net/2024/May/29/training-not-chatting/
+https://www.anthropic.com/news/claude-3-5-sonnet
+
+# Expected failure sample: blocked by target site, used to verify per_document isolation.
+https://openai.com/index/hello-gpt-4o/

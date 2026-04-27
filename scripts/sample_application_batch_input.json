@@ -1,0 +1,18 @@
+[
+  {
+    "title": "AI startup tooling is getting more opinionated",
+    "source_type": "blog",
+    "url": "https://example.com/ai-startup-tooling",
+    "author": "Example Author",
+    "language": "en",
+    "content_text": "AI startup tooling is shifting toward agent workflows. OpenAI and Anthropic are mentioned alongside developer tooling. Teams still disagree on deployment readiness, which creates product gaps."
+  },
+  {
+    "title": "Agent workflow demand is becoming more concrete",
+    "source_type": "blog",
+    "url": "https://example.com/agent-workflow-demand",
+    "author": "Example Author",
+    "language": "en",
+    "content_text": "Developers want better observability and deployment controls for agent workflows. OpenAI is mentioned again, and teams still see whitespace in startup tooling."
+  }
+]

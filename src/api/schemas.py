@@ -16,6 +16,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from src.ingestion.schemas import RawDocumentInput
 
 # ──────────────────────────── 基础结构 ────────────────────────────
 
@@ -168,6 +169,14 @@ class ReviewPatchRequest(BaseModel):
     field_name: str = Field(..., description="修订字段名")
     new_value: Any = Field(..., description="新值")
     reason: str | None = Field(None, description="修订原因")
+
+
+class ApplicationPipelineRunRequest(BaseModel):
+    """单文档 application pipeline 运行请求"""
+
+    document: RawDocumentInput = Field(..., description="原始文档输入")
+    persist: bool = Field(default=False, description="是否走现有 persistence 路径")
+    include_daily_brief: bool = Field(default=True, description="是否生成 daily brief")
 
 
 # ──────────────────────────── 专用响应 ────────────────────────────
