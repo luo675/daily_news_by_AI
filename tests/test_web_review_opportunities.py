@@ -15,8 +15,8 @@ from src.admin.review_schemas import ReviewHistoryResponse
 from src.admin.review_service_db import DatabaseReviewService, InvalidReviewError
 from src.admin import review_service_db
 from src.admin.review_schemas import ReviewEditCreate, OverrideStatus
-from src.domain.models import DailyBrief, Document, OpportunityAssessment, ReviewEdit
-from src.web.service import OpportunityReviewView, RiskReviewView, UncertaintyReviewView, WebMvpService
+from src.domain.models import DailyBrief, Document, DocumentSummary, OpportunityAssessment, ReviewEdit
+from src.web.service import OpportunityReviewView, RiskReviewView, SummaryReviewView, UncertaintyReviewView, WebMvpService
 
 from src.web import service as web_service_module
 
@@ -65,6 +65,24 @@ def _build_opportunity() -> OpportunityAssessment:
     opportunity.evidence_items = []
     opportunity._review_test_document = evidence_document
     return opportunity
+
+
+def _build_document_with_summary() -> Document:
+    document = Document(
+        id=uuid.uuid4(),
+        title="Reviewed summary document",
+        content_text="AI coding tools changed this week with new review workflows.",
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    document.summary = DocumentSummary(
+        id=uuid.uuid4(),
+        document_id=document.id,
+        summary_zh="自动中文摘要",
+        summary_en="Automatic English summary",
+        key_points=["Auto key point one", "Auto key point two"],
+    )
+    return document
 
 
 def _build_brief_with_risks() -> DailyBrief:
@@ -169,9 +187,15 @@ class _FakeReadSession:
 
 
 class _FakeWriteSession:
-    def __init__(self, opportunity: OpportunityAssessment | None = None, brief: DailyBrief | None = None):
+    def __init__(
+        self,
+        opportunity: OpportunityAssessment | None = None,
+        brief: DailyBrief | None = None,
+        summary: DocumentSummary | None = None,
+    ):
         self.opportunity = opportunity
         self.brief = brief
+        self.summary = summary
         self.closed = False
         self.rolled_back = False
 
@@ -180,6 +204,8 @@ class _FakeWriteSession:
             return self.opportunity
         if self.brief is not None and object_id == self.brief.id:
             return self.brief
+        if self.summary is not None and object_id == self.summary.id:
+            return self.summary
         return None
 
     def rollback(self):
@@ -272,6 +298,121 @@ def test_list_review_opportunities_applies_manual_overrides(monkeypatch, workspa
     assert views[0].effective_values["priority_score"] == 8
     assert views[0].effective_values["uncertainty"] is True
     assert views[0].effective_values["uncertainty_reason"] == "manual note"
+
+
+def test_save_summary_review_writes_review_edits_only(monkeypatch, workspace_tmp_path: Path) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    service = WebMvpService()
+    document = _build_document_with_summary()
+    summary = document.summary
+    assert summary is not None
+    write_session = _FakeWriteSession(summary=summary)
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(service, "_require_session", lambda: write_session)
+
+    class FakeDatabaseReviewService:
+        def __init__(self, session):
+            self.session = session
+
+        def get_effective_value(self, target_type, target_id, field_name, auto_value=None):
+            return auto_value
+
+        def get_override_status(self, target_type, target_id, field_name):
+            return OverrideStatus(
+                field_name=field_name,
+                source="auto",
+                last_manual_value=None,
+                last_manual_at=None,
+                current_auto_value=None,
+            )
+
+        def create_batch(self, target_type, target_id, batch, reason=None):
+            captured["target_type"] = target_type
+            captured["target_id"] = target_id
+            captured["batch"] = batch
+            return batch
+
+    monkeypatch.setattr("src.web.service.DatabaseReviewService", FakeDatabaseReviewService)
+
+    message = service.save_summary_review(
+        str(summary.id),
+        {
+            "summary_zh": "人工中文摘要",
+            "summary_en": "Manual English summary",
+            "key_points": "Manual key point one\nManual key point two",
+            "reason": "Summary review",
+        },
+    )
+
+    assert message == "Summary review saved."
+    assert summary.summary_zh == "自动中文摘要"
+    assert summary.summary_en == "Automatic English summary"
+    assert summary.key_points == ["Auto key point one", "Auto key point two"]
+    edits = captured["batch"]
+    assert [edit.field_name for edit in edits] == ["summary_zh", "summary_en", "key_points"]
+    assert edits[0].new_value == "人工中文摘要"
+    assert edits[1].new_value == "Manual English summary"
+    assert edits[2].new_value == ["Manual key point one", "Manual key point two"]
+
+
+def test_save_summary_review_reset_to_auto(monkeypatch, workspace_tmp_path: Path) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    service = WebMvpService()
+    document = _build_document_with_summary()
+    summary = document.summary
+    assert summary is not None
+    write_session = _FakeWriteSession(summary=summary)
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(service, "_require_session", lambda: write_session)
+
+    class FakeDatabaseReviewService:
+        def __init__(self, session):
+            self.session = session
+
+        def get_effective_value(self, target_type, target_id, field_name, auto_value=None):
+            values = {
+                "summary_zh": "人工中文摘要",
+                "summary_en": "Manual English summary",
+                "key_points": ["Manual key point one"],
+            }
+            return values[field_name]
+
+        def get_override_status(self, target_type, target_id, field_name):
+            return OverrideStatus(
+                field_name=field_name,
+                source="manual",
+                last_manual_value=None,
+                last_manual_at=datetime.now(timezone.utc),
+                current_auto_value=None,
+            )
+
+        def create_batch(self, target_type, target_id, batch, reason=None):
+            captured["batch"] = batch
+            return batch
+
+    monkeypatch.setattr("src.web.service.DatabaseReviewService", FakeDatabaseReviewService)
+
+    message = service.save_summary_review(
+        str(summary.id),
+        {
+            "summary_zh": "",
+            "reset_summary_zh": "on",
+            "summary_en": "",
+            "reset_summary_en": "on",
+            "key_points": "",
+            "reset_key_points": "on",
+            "reason": "Reset summary fields",
+        },
+    )
+
+    assert message == "Summary review saved."
+    edits = captured["batch"]
+    assert [edit.field_name for edit in edits] == ["summary_zh", "summary_en", "key_points"]
+    assert edits[0].new_value == review_service_db.RESET_TO_AUTO_SENTINEL
+    assert edits[1].new_value == review_service_db.RESET_TO_AUTO_SENTINEL
+    assert edits[2].new_value == review_service_db.RESET_TO_AUTO_SENTINEL
 
 
 def test_save_opportunity_review_writes_review_edits_only(monkeypatch, workspace_tmp_path: Path) -> None:
@@ -509,6 +650,64 @@ def test_review_page_renders_opportunity_review_card(monkeypatch, workspace_tmp_
     assert "action=\"/web/review/opportunities/" in response.text
     assert "name=\"reset_status\"" in response.text
     assert "name=\"reset_uncertainty\"" in response.text
+
+
+def test_review_page_renders_summary_review_card(monkeypatch, workspace_tmp_path: Path) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    document = _build_document_with_summary()
+    summary = document.summary
+    assert summary is not None
+    edit = ReviewEdit(
+        id=uuid.uuid4(),
+        target_type="summary",
+        target_id=summary.id,
+        field_name="summary_en",
+        old_value='"Automatic English summary"',
+        new_value='"Manual English summary"',
+        reviewer="owner",
+        reason="manual override",
+        created_at=datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(web_routes.service, "list_review_uncertainties", lambda: ([], None))
+    monkeypatch.setattr(web_routes.service, "list_review_risks", lambda: ([], None))
+    monkeypatch.setattr(web_routes.service, "list_review_opportunities", lambda: ([], None))
+    monkeypatch.setattr(
+        web_routes.service,
+        "list_review_documents",
+        lambda: (
+            [
+                SummaryReviewView(
+                    document=document,
+                    summary=summary,
+                    auto_values={
+                        "summary_zh": "自动中文摘要",
+                        "summary_en": "Automatic English summary",
+                        "key_points": ["Auto key point one", "Auto key point two"],
+                    },
+                    effective_values={
+                        "summary_zh": "人工中文摘要",
+                        "summary_en": "Manual English summary",
+                        "key_points": ["Manual key point one"],
+                    },
+                    history=[edit],
+                )
+            ],
+            None,
+        ),
+    )
+
+    client = TestClient(create_app())
+    response = client.get("/web/review")
+
+    assert response.status_code == 200
+    assert "Summary Review" in response.text
+    assert "Reviewed summary document" in response.text
+    assert "Automatic Result" in response.text
+    assert "Manual Effective Values" in response.text
+    assert "name=\"reset_summary_zh\"" in response.text
+    assert "name=\"reset_summary_en\"" in response.text
+    assert "name=\"reset_key_points\"" in response.text
+    assert f"action=\"/web/review/{summary.id}\"" in response.text
 
 
 def test_review_page_submit_includes_explicit_reset_flags(monkeypatch, workspace_tmp_path: Path) -> None:

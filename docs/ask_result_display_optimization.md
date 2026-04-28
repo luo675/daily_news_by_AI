@@ -92,3 +92,140 @@ The next implementation task should be considered complete when:
 - existing Ask behavior stays unchanged
 - existing Ask tests still pass
 - new rendering tests cover the updated layout and status presentation
+
+## Ask Result Contract
+
+This section freezes the current lightweight contract for the `/web/ask` result view.
+
+Scope:
+
+- this is a page rendering contract for `src/api/routes/web.py`
+- this is not a unified API schema redesign
+- this does not change Ask retrieval, provider routing, or history storage
+
+### Result View: Required Fields
+
+The Ask result page currently requires these fields to exist on the object returned by `service.ask_question()`:
+
+- `question`
+  - used as the left-column question block
+  - if missing: rendering is not contract-safe
+- `answer`
+  - used as the left-column answer block
+  - if missing: rendering is not contract-safe
+
+These are the only hard-required fields for the result page itself.
+
+### Result View: Optional Fields With Stable Downgrade
+
+- `answer_mode`
+  - purpose: drives result status line and run metadata
+  - downgrade: if missing or empty, the page falls back to `local_only`
+- `provider_name`
+  - purpose: shown in run metadata
+  - downgrade: if missing or empty, render `provider=-`
+- `note`
+  - purpose: shown in run metadata
+  - downgrade: if missing or empty, omit the note line
+- `created_at`
+  - purpose: shown in run metadata when available
+  - downgrade: if missing or empty, omit the created time line
+- `error`
+  - purpose: shown in `Error State`
+  - downgrade: if missing or empty, do not render the error block
+- `evidence`
+  - purpose: right-column evidence cards
+  - downgrade: if missing, `None`, or empty, show explicit evidence empty state
+- `opportunities`
+  - purpose: optional structured result section
+  - downgrade: if missing, `None`, or empty, show `No opportunities extracted.`
+- `risks`
+  - purpose: optional structured result section
+  - downgrade: if missing, `None`, or empty, show `No risks extracted.`
+- `uncertainties`
+  - purpose: optional structured result section
+  - downgrade: if missing, `None`, or empty, show `No uncertainties extracted.`
+- `related_topics`
+  - purpose: optional structured result section
+  - downgrade: if missing, `None`, or empty, show `No related topics extracted.`
+- `meta`
+  - purpose: optional metadata section
+  - downgrade: if missing, not a dict, or empty, show `No metadata available.`
+
+### Evidence Item Contract
+
+Each entry inside `evidence` is treated as an evidence item. The page is tolerant of partial items.
+
+Expected fields:
+
+- `title`
+  - preferred evidence label
+  - downgrade: if missing, render `Untitled evidence`
+- `document_id`
+  - if present, treat the evidence as document-backed and render a document link
+  - if absent, render plain text evidence title
+- `evidence_type`
+  - optional explicit source type
+  - downgrade: infer `document` when `document_id` exists, otherwise infer `brief`
+- `snippet`
+  - preferred evidence body text
+  - downgrade: use `summary`
+- `summary`
+  - fallback evidence body text
+  - downgrade: if both `snippet` and `summary` are empty, render `No snippet available.`
+- `match_basis`
+  - optional evidence metadata
+  - downgrade: omit the line when absent
+
+### Reviewed Evidence Rule
+
+For reviewed evidence, the page contract is:
+
+- the Ask result should display the already-resolved effective value
+- the page must not reinterpret review state on its own
+- the page does not compute manual-vs-auto precedence
+- reviewed opportunities, risks, and uncertainties are expected to arrive inside `evidence[*].summary` or `evidence[*].snippet` already resolved to effective values
+
+That means:
+
+- if a manual override exists, Ask should surface the override
+- if reset-to-auto was applied, Ask should surface the automatic value again
+- the page only renders what the Ask result object provides
+
+### Page Dependency Split
+
+Fields the page directly depends on:
+
+- hard required: `question`, `answer`
+- status + metadata dependency: `answer_mode`, `provider_name`, `note`, `created_at`, `error`
+- right-column dependency: `evidence`, `opportunities`, `risks`, `uncertainties`, `related_topics`, `meta`
+
+Fields that are optional enhancements rather than hard dependencies:
+
+- `provider_name`
+- `note`
+- `created_at`
+- `error`
+- all structured sections other than `question` and `answer`
+- evidence subfields other than a minimally renderable title/body fallback
+
+## Ask History Contract
+
+The `/web/ask` history list uses a separate lightweight contract from `service.list_qa_history()`.
+
+Required by the current history card rendering:
+
+- `question`
+- `answer`
+- `answer_mode`
+
+Optional with downgrade:
+
+- `provider_name`
+  - fallback: `-`
+- `created_at`
+  - fallback: `-`
+- `note`
+  - if empty, omit the note line
+
+History rendering keeps the answer truncated in history view and leaves full answer rendering to the result page.

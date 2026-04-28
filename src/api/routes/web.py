@@ -24,6 +24,127 @@ def _bool_label(value: bool) -> str:
     return "yes" if value else "no"
 
 
+def _truncate_text(value: object, *, limit: int) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return f"{text[: max(limit - 1, 0)].rstrip()}..."
+
+
+def _coerce_items(value: object) -> list[object]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _render_value(value: object) -> str:
+    if value is None:
+        return "-"
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    if isinstance(value, (list, tuple)):
+        parts = [str(item).strip() for item in value if str(item).strip()]
+        return ", ".join(parts) if parts else "-"
+    if isinstance(value, dict):
+        parts = [f"{key}={value[key]}" for key in value if value[key] is not None and str(value[key]).strip()]
+        return ", ".join(parts) if parts else "-"
+    text = str(value).strip()
+    return text or "-"
+
+
+def _render_definition_rows(rows: list[tuple[str, object]]) -> str:
+    parts: list[str] = []
+    for label, value in rows:
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        rendered_value = _render_value(value)
+        parts.append(f"<div><strong>{escape(label)}:</strong> {escape(rendered_value)}</div>")
+    return "".join(parts)
+
+
+def _render_structured_list(items: object, *, empty_message: str) -> str:
+    values = _coerce_items(items)
+    if not values:
+        return f"<div class='muted'>{escape(empty_message)}</div>"
+    rendered: list[str] = []
+    for item in values:
+        if isinstance(item, dict):
+            title = str(
+                item.get("title")
+                or item.get("name")
+                or item.get("title_en")
+                or item.get("title_zh")
+                or item.get("description")
+                or "Untitled item"
+            )
+            detail = _render_value(
+                {
+                    key: value
+                    for key, value in item.items()
+                    if key not in {"title", "name", "title_en", "title_zh"} and str(value or "").strip()
+                }
+            )
+            rendered.append(
+                f"<li><strong>{escape(title)}</strong>"
+                f"{'' if detail == '-' else f'<div class=\"muted\">{escape(detail)}</div>'}</li>"
+            )
+            continue
+        rendered.append(f"<li>{escape(str(item))}</li>")
+    return f"<ul>{''.join(rendered)}</ul>"
+
+
+def _render_meta_section(meta: object) -> str:
+    if not isinstance(meta, dict) or not any(value is not None and str(value).strip() for value in meta.values()):
+        return "<div class='muted'>No metadata available.</div>"
+    return _render_definition_rows([(str(key), value) for key, value in meta.items()])
+
+
+def _build_ask_status(result: dict[str, object]) -> tuple[str, str]:
+    answer_mode = str(result.get("answer_mode") or "local_only")
+    if answer_mode == "insufficient_local_evidence":
+        return "incomplete", "Local evidence was not sufficient for a reliable answer."
+    if answer_mode == "local_fallback":
+        return "fallback warning", "External provider failed, so the page is showing the local answer."
+    if answer_mode == "local_with_external_reasoning":
+        return "bounded external reasoning", "External reasoning stayed constrained to retrieved local evidence."
+    return "local answer", "Answer rendered from local evidence only."
+
+
+def _render_ask_evidence(items: object) -> str:
+    evidence_items = _coerce_items(items)
+    if not evidence_items:
+        return "<div class='muted'>No local evidence was available for this result.</div>"
+    cards: list[str] = []
+    for raw_item in evidence_items:
+        item = raw_item if isinstance(raw_item, dict) else {"title": str(raw_item)}
+        title = str(item.get("title") or "Untitled evidence")
+        summary = str(item.get("summary") or "").strip()
+        snippet = str(item.get("snippet") or "").strip() or summary or "No snippet available."
+        source_type = str(item.get("evidence_type") or ("document" if item.get("document_id") else "brief"))
+        match_basis = str(item.get("match_basis") or "").strip()
+        if item.get("document_id"):
+            title_html = f"<a href='/web/documents/{escape(str(item['document_id']))}'>{escape(title)}</a>"
+        else:
+            title_html = escape(title)
+        meta_rows = [f"source={source_type}"]
+        if match_basis:
+            meta_rows.append(f"match_basis={match_basis}")
+        cards.append(
+            f"""
+            <article class="ask-evidence-card">
+              <h3>{title_html}</h3>
+              <div class="muted">{''.join(f"<div>{escape(row)}</div>" for row in meta_rows)}</div>
+              <div class="pre">{escape(snippet)}</div>
+            </article>
+            """
+        )
+    return "".join(cards)
+
+
 def _layout(title: str, body: str, message: str | None = None) -> HTMLResponse:
     nav_items = [
         ("/web/dashboard", "Dashboard"),
@@ -113,6 +234,18 @@ def _layout(title: str, body: str, message: str | None = None) -> HTMLResponse:
         .chip {{
           display: inline-block; padding: 4px 10px; border-radius: 999px; background: #efe8dc; color: #5f503e;
         }}
+        .ask-section {{ display: grid; gap: 10px; margin-bottom: 14px; }}
+        .ask-section:last-child {{ margin-bottom: 0; }}
+        .ask-status {{
+          border-left: 4px solid var(--accent); background: #fbf1ea; padding: 12px; border-radius: 10px;
+        }}
+        .ask-status.warning {{ border-left-color: #b45309; background: #fff4e5; }}
+        .ask-status.incomplete {{ border-left-color: #9f1239; background: #fff1f2; }}
+        .ask-evidence-card {{
+          border: 1px solid var(--line); border-radius: 12px; padding: 12px; background: #fcfaf5;
+        }}
+        .ask-evidence-card h3 {{ margin: 0 0 8px; font-size: 1rem; }}
+        .compact-list {{ display: grid; gap: 12px; }}
         .pre {{
           white-space: pre-wrap; background: #f8f4ed; border: 1px solid var(--line); border-radius: 10px; padding: 12px;
         }}
@@ -605,28 +738,43 @@ status={escape(str(item.auto_values.get("status") or ""))}</div>
             </section>
             """
         )
-    for document in documents:
-        summary = document.summary
-        if summary is None:
-            continue
-        history = service.get_review_history(summary.id)
+    for item in documents:
+        document = item.document
+        summary = item.summary
+        history = item.history
         history_html = "".join(
             f"<li>{escape(edit.field_name)} -> {escape(str(edit.new_value))} <span class='muted'>{escape(str(edit.created_at))}</span></li>"
             for edit in history[:5]
         ) or "<li>No review history.</li>"
-        key_points_text = "\n".join(summary.key_points or [])
+        auto_key_points_text = "\n".join(str(point) for point in item.auto_values.get("key_points") or [])
+        effective_key_points_text = "\n".join(str(point) for point in item.effective_values.get("key_points") or [])
         sections.append(
             f"""
             <section class="card">
-              <h2>{escape(document.title)}</h2>
+              <h2>Summary Review</h2>
+              <div><strong>{escape(document.title)}</strong></div>
               <div class="muted">Summary target id: {summary.id}</div>
-              <form method="post" action="/web/review/{summary.id}">
-                <textarea name="summary_zh" placeholder="summary_zh">{escape(summary.summary_zh or '')}</textarea>
-                <textarea name="summary_en" placeholder="summary_en">{escape(summary.summary_en or '')}</textarea>
-                <textarea name="key_points" placeholder="One key point per line">{escape(key_points_text)}</textarea>
-                <input name="reason" placeholder="Why are you editing this summary?">
-                <button>Save Review</button>
-              </form>
+              <div class="grid cols-2" style="margin-top:12px;">
+                <div>
+                  <h3>Automatic Result</h3>
+                  <div class="pre">summary_zh={escape(str(item.auto_values.get("summary_zh") or ""))}
+summary_en={escape(str(item.auto_values.get("summary_en") or ""))}
+key_points={escape(auto_key_points_text)}</div>
+                </div>
+                <div>
+                  <h3>Manual Effective Values</h3>
+                  <form method="post" action="/web/review/{summary.id}">
+                    <textarea name="summary_zh" placeholder="summary_zh">{escape(str(item.effective_values.get("summary_zh") or ""))}</textarea>
+                    <label><input type="checkbox" name="reset_summary_zh"> reset to auto</label>
+                    <textarea name="summary_en" placeholder="summary_en">{escape(str(item.effective_values.get("summary_en") or ""))}</textarea>
+                    <label><input type="checkbox" name="reset_summary_en"> reset to auto</label>
+                    <textarea name="key_points" placeholder="One key point per line">{escape(effective_key_points_text)}</textarea>
+                    <label><input type="checkbox" name="reset_key_points"> reset to auto</label>
+                    <input name="reason" placeholder="Why are you editing this summary?">
+                    <button>Save Review</button>
+                  </form>
+                </div>
+              </div>
               <h3>Recent Review Edits</h3>
               <ul>{history_html}</ul>
             </section>
@@ -754,9 +902,9 @@ async def ask_page(message: str | None = None) -> HTMLResponse:
         f"""
         <section class='card'>
           <h2>{escape(item['question'])}</h2>
-          <div class='muted'>mode={escape(item['answer_mode'])} provider={escape(str(item.get('provider_name') or '-'))}</div>
-          <div class='muted'>{escape(str(item.get('note') or ''))}</div>
-          <div class='pre'>{escape(item['answer'])}</div>
+          <div class='muted'>mode={escape(item['answer_mode'])} provider={escape(str(item.get('provider_name') or '-'))} created_at={escape(str(item.get('created_at') or '-'))}</div>
+          {f"<div class='muted'>{escape(str(item.get('note') or ''))}</div>" if str(item.get('note') or '').strip() else ""}
+          <div class='pre'>{escape(_truncate_text(item['answer'], limit=220))}</div>
         </section>
         """
         for item in history
@@ -782,30 +930,80 @@ async def ask_page(message: str | None = None) -> HTMLResponse:
 async def ask_submit(request: Request) -> HTMLResponse:
     form = await _read_form(request)
     result = service.ask_question(question=form.get("question", ""), provider_id=form.get("provider_id", ""))
-    evidence_html = "".join(
-        (
-            f"<li><a href='/web/documents/{escape(str(item['document_id']))}'>{escape(item['title'])}</a>: {escape(item.get('snippet') or item.get('summary') or '')}</li>"
-            if item.get("document_id")
-            else f"<li>{escape(item['title'])}: {escape(item.get('snippet') or item.get('summary') or '')}</li>"
-        )
-        for item in result["evidence"]
-    ) or "<li>No local evidence.</li>"
+    status_label, status_message = _build_ask_status(result)
+    status_class = "ask-status"
+    if status_label == "fallback warning":
+        status_class = "ask-status warning"
+    elif status_label == "incomplete":
+        status_class = "ask-status incomplete"
+    run_metadata_lines = [
+        f"mode={result.get('answer_mode') or 'local_only'}",
+        f"provider={result.get('provider_name') or '-'}",
+    ]
+    if str(result.get("note") or "").strip():
+        run_metadata_lines.append(f"note={result.get('note')}")
+    if str(result.get("created_at") or "").strip():
+        run_metadata_lines.append(f"created_at={result.get('created_at')}")
+    run_metadata_html = "".join(
+        f"<div>{escape(str(line))}</div>"
+        for line in run_metadata_lines
+    ) or "<div class='muted'>No run metadata available.</div>"
+    error_html = ""
+    if str(result.get("error") or "").strip():
+        error_html = f"""
+        <section class="ask-section">
+          <h2>Error State</h2>
+          <div class="pre">{escape(str(result.get("error") or ""))}</div>
+        </section>
+        """
     body = f"""
     <div class="grid cols-2">
       <section class="card">
-        <h2>Question</h2>
-        <div class="pre">{escape(result['question'])}</div>
-        <h2>Answer</h2>
-        <div class="muted">mode={escape(result['answer_mode'])} provider={escape(str(result.get('provider_name') or '-'))}</div>
-        <div class="muted">{escape(str(result.get('note') or ''))}</div>
-        <div class="pre">{escape(result['answer'])}</div>
-        <div class="muted">{escape(str(result.get('error') or ''))}</div>
+        <div class="{status_class}" style="margin-bottom:14px;">
+          <strong>{escape(status_label)}</strong>
+          <div class="muted">{escape(status_message)}</div>
+        </div>
+        <section class="ask-section">
+          <h2>Question</h2>
+          <div class="pre">{escape(result['question'])}</div>
+        </section>
+        <section class="ask-section">
+          <h2>Answer</h2>
+          <div class="pre">{escape(result['answer'])}</div>
+        </section>
+        <section class="ask-section">
+          <h2>Run Metadata</h2>
+          <div class="stack">{run_metadata_html}</div>
+        </section>
+        {error_html}
       </section>
-      <section class="card">
-        <h2>Evidence</h2>
-        <ul>{evidence_html}</ul>
-        <div class="inline"><a href="/web/ask">Back to Ask</a></div>
-      </section>
+      <div class="stack">
+        <section class="card">
+          <h2>Evidence</h2>
+          <div class="compact-list">{_render_ask_evidence(result.get("evidence"))}</div>
+        </section>
+        <section class="card">
+          <h2>Opportunities</h2>
+          {_render_structured_list(result.get("opportunities"), empty_message="No opportunities extracted.")}
+        </section>
+        <section class="card">
+          <h2>Risks</h2>
+          {_render_structured_list(result.get("risks"), empty_message="No risks extracted.")}
+        </section>
+        <section class="card">
+          <h2>Uncertainties</h2>
+          {_render_structured_list(result.get("uncertainties"), empty_message="No uncertainties extracted.")}
+        </section>
+        <section class="card">
+          <h2>Related Topics</h2>
+          {_render_structured_list(result.get("related_topics"), empty_message="No related topics extracted.")}
+        </section>
+        <section class="card">
+          <h2>Meta</h2>
+          {_render_meta_section(result.get("meta"))}
+          <div class="inline"><a href="/web/ask">Back to Ask</a></div>
+        </section>
+      </div>
     </div>
     """
     return _layout("Ask Result", body)

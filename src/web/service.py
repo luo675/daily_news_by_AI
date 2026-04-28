@@ -79,6 +79,7 @@ _RISK_REVIEW_FIELDS = ("severity", "description")
 _RISK_SEVERITY_VALUES = ("high", "medium", "low")
 _UNCERTAINTY_REVIEW_FIELDS = ("uncertainty_note", "uncertainty_status")
 _UNCERTAINTY_STATUS_VALUES = ("open", "watching", "resolved")
+_SUMMARY_REVIEW_FIELDS = ("summary_zh", "summary_en", "key_points")
 _UNCHANGED_UNCERTAINTY_STATUS = "__UNCHANGED__"
 _NO_UNCERTAINTY_STATUS_CHANGE = object()
 
@@ -146,6 +147,15 @@ class UncertaintyReviewView:
     item_id: str
     route_id: str
     target_id: uuid.UUID
+    auto_values: dict[str, Any]
+    effective_values: dict[str, Any]
+    history: list[Any]
+
+
+@dataclass(slots=True)
+class SummaryReviewView:
+    document: Document
+    summary: DocumentSummary
     auto_values: dict[str, Any]
     effective_values: dict[str, Any]
     history: list[Any]
@@ -389,8 +399,8 @@ class WebMvpService:
 
         return self._run_db_read(_query, empty=None)
 
-    def list_review_documents(self) -> tuple[list[Document], str | None]:
-        def _query(session: Session) -> list[Document]:
+    def list_review_documents(self) -> tuple[list[SummaryReviewView], str | None]:
+        def _query(session: Session) -> list[SummaryReviewView]:
             stmt = (
                 select(Document)
                 .join(DocumentSummary, DocumentSummary.document_id == Document.id)
@@ -398,7 +408,13 @@ class WebMvpService:
                 .order_by(Document.updated_at.desc())
                 .limit(20)
             )
-            return list(session.scalars(stmt).unique())
+            documents = list(session.scalars(stmt).unique())
+            review_service = DatabaseReviewService(session)
+            return [
+                self._build_summary_review_view(review_service, document)
+                for document in documents
+                if document.summary is not None
+            ]
 
         return self._run_db_read(_query, empty=[])
 
@@ -475,6 +491,25 @@ class WebMvpService:
 
         return self._run_db_read(_query, empty=[])
 
+    def _build_summary_review_view(
+        self,
+        review_service: DatabaseReviewService,
+        document: Document,
+    ) -> SummaryReviewView:
+        summary = document.summary
+        if summary is None:
+            raise ValueError("Document summary is required for summary review view.")
+        auto_values = self._get_summary_auto_values(summary)
+        effective_values = self._get_summary_effective_values(summary, review_service)
+        history = review_service.get_history("summary", summary.id).edits[:5]
+        return SummaryReviewView(
+            document=document,
+            summary=summary,
+            auto_values=auto_values,
+            effective_values=effective_values,
+            history=history,
+        )
+
     def get_review_history(self, summary_id: uuid.UUID) -> list[ReviewEdit]:
         session = self._try_create_db_session()
         if session is None:
@@ -500,51 +535,48 @@ class WebMvpService:
             summary = session.get(DocumentSummary, uuid.UUID(summary_id))
             if summary is None:
                 return "Summary not found."
-            service = DatabaseReviewService(session)
+            review_service = DatabaseReviewService(session)
+            auto_values = self._get_summary_auto_values(summary)
+            current_values = {
+                field_name: review_service.get_effective_value(
+                    "summary",
+                    summary.id,
+                    field_name,
+                    auto_values[field_name],
+                )
+                for field_name in _SUMMARY_REVIEW_FIELDS
+            }
+            override_sources = {
+                field_name: review_service.get_override_status(
+                    "summary",
+                    summary.id,
+                    field_name,
+                ).source
+                for field_name in _SUMMARY_REVIEW_FIELDS
+            }
             edits: list[ReviewEditCreate] = []
-            summary_zh = form.get("summary_zh", "").strip()
-            summary_en = form.get("summary_en", "").strip()
-            key_points_text = form.get("key_points", "").strip()
-            new_key_points = [line.strip() for line in key_points_text.splitlines() if line.strip()]
 
-            if summary_zh != (summary.summary_zh or "").strip():
+            for field_name in _SUMMARY_REVIEW_FIELDS:
+                new_value = self._parse_summary_review_form_value(
+                    field_name,
+                    form,
+                    override_source=override_sources[field_name],
+                )
+                if new_value == current_values[field_name]:
+                    continue
                 edits.append(
                     ReviewEditCreate(
-                        field_name="summary_zh",
-                        old_value=summary.summary_zh,
-                        new_value=summary_zh or None,
+                        field_name=field_name,
+                        old_value=current_values[field_name],
+                        new_value=new_value,
                         reason=form.get("reason") or "Web summary review update",
                         reviewer="owner",
                     )
                 )
-                summary.summary_zh = summary_zh or None
-            if summary_en != (summary.summary_en or "").strip():
-                edits.append(
-                    ReviewEditCreate(
-                        field_name="summary_en",
-                        old_value=summary.summary_en,
-                        new_value=summary_en or None,
-                        reason=form.get("reason") or "Web summary review update",
-                        reviewer="owner",
-                    )
-                )
-                summary.summary_en = summary_en or None
-            if new_key_points != (summary.key_points or []):
-                edits.append(
-                    ReviewEditCreate(
-                        field_name="key_points",
-                        old_value=summary.key_points or [],
-                        new_value=new_key_points,
-                        reason=form.get("reason") or "Web summary review update",
-                        reviewer="owner",
-                    )
-                )
-                summary.key_points = new_key_points
             if not edits:
                 return "No summary changes detected."
 
-            service.create_batch("summary", summary.id, edits, reason=form.get("reason"))
-            session.commit()
+            review_service.create_batch("summary", summary.id, edits, reason=form.get("reason"))
             return "Summary review saved."
         except Exception as exc:
             session.rollback()
@@ -1268,6 +1300,7 @@ class WebMvpService:
                 document,
                 question_terms,
                 summary_text=summary_text,
+                review_service=review_service,
             )
             if score <= 0:
                 continue
@@ -1275,6 +1308,7 @@ class WebMvpService:
                 document,
                 question_terms,
                 summary_text=summary_text,
+                review_service=review_service,
             )
             evidence.append(
                 {
@@ -1338,12 +1372,18 @@ class WebMvpService:
         question_terms: list[str],
         *,
         summary_text: str | None = None,
+        review_service: DatabaseReviewService | None = None,
     ) -> tuple[str, str | None, str]:
-        key_point = self._pick_matching_line(document.summary.key_points or [], question_terms) if document.summary else None
+        effective_key_points = []
+        if document.summary is not None:
+            effective_key_points = self._get_summary_effective_values(document.summary, review_service).get("key_points") or []
+        key_point = self._pick_matching_line(effective_key_points, question_terms)
         if key_point:
-            return key_point, summary_text or self._build_summary_text(document), "key_point"
+            return key_point, summary_text or self._build_summary_text(document, review_service), "key_point"
 
-        effective_summary = summary_text if summary_text is not None else self._build_summary_text(document)
+        effective_summary = (
+            summary_text if summary_text is not None else self._build_summary_text(document, review_service)
+        )
         if effective_summary:
             summary_snippet = self._clip_matching_text(effective_summary, question_terms, default_size=220)
             if summary_snippet:
@@ -1507,6 +1547,7 @@ class WebMvpService:
         terms: list[str],
         *,
         summary_text: str | None = None,
+        review_service: DatabaseReviewService | None = None,
     ) -> tuple[int, int]:
         if not terms:
             return (0, 0)
@@ -1514,8 +1555,10 @@ class WebMvpService:
         title_text = (document.title or "").lower()
         content_text = (document.content_text or "").lower()
         url_text = (document.url or "").lower()
-        summary_text = (summary_text if summary_text is not None else self._build_summary_text(document)).lower()
-        key_points_text = self._build_key_points_text(document).lower()
+        summary_text = (
+            summary_text if summary_text is not None else self._build_summary_text(document, review_service)
+        ).lower()
+        key_points_text = self._build_key_points_text(document, review_service).lower()
 
         summary_matches = 0
         title_matches = 0
@@ -1558,10 +1601,58 @@ class WebMvpService:
         matched_terms = summary_matches + content_matches
         return score, matched_terms
 
-    def _build_summary_text(self, document: Document) -> str:
+    def _build_summary_text(
+        self,
+        document: Document,
+        review_service: DatabaseReviewService | None = None,
+    ) -> str:
         if document.summary is None:
             return ""
-        return document.summary.summary_en or document.summary.summary_zh or ""
+        effective_values = self._get_summary_effective_values(document.summary, review_service)
+        return str(effective_values.get("summary_en") or effective_values.get("summary_zh") or "")
+
+    def _get_summary_auto_values(self, summary: DocumentSummary) -> dict[str, Any]:
+        return {
+            "summary_zh": summary.summary_zh,
+            "summary_en": summary.summary_en,
+            "key_points": list(summary.key_points or []),
+        }
+
+    def _get_summary_effective_values(
+        self,
+        summary: DocumentSummary,
+        review_service: DatabaseReviewService | None,
+    ) -> dict[str, Any]:
+        auto_values = self._get_summary_auto_values(summary)
+        if review_service is None:
+            return auto_values
+        return {
+            field_name: review_service.get_effective_value(
+                "summary",
+                summary.id,
+                field_name,
+                auto_values[field_name],
+            )
+            for field_name in _SUMMARY_REVIEW_FIELDS
+        }
+
+    def _parse_summary_review_form_value(
+        self,
+        field_name: str,
+        form: dict[str, str],
+        *,
+        override_source: str,
+    ) -> Any:
+        reset_requested = form.get(f"reset_{field_name}") == "on"
+        raw_value = form.get(field_name, "")
+        if reset_requested:
+            return RESET_TO_AUTO_SENTINEL
+        if field_name == "key_points":
+            return [line.strip() for line in str(raw_value).splitlines() if line.strip()]
+        value = str(raw_value).strip()
+        if value == "" and override_source == "manual":
+            return None
+        return value or None
 
     def _build_document_ask_summary(
         self,
@@ -1569,7 +1660,7 @@ class WebMvpService:
         opportunities: list[OpportunityAssessment],
         review_service: DatabaseReviewService | None,
     ) -> str:
-        base_summary = self._build_summary_text(document)
+        base_summary = self._build_summary_text(document, review_service)
         reviewed_opportunities = self._build_reviewed_opportunity_summary(opportunities, review_service)
         if reviewed_opportunities and base_summary:
             return f"{base_summary}\n\nReviewed opportunities: {reviewed_opportunities}"
@@ -1577,10 +1668,16 @@ class WebMvpService:
             return f"Reviewed opportunities: {reviewed_opportunities}"
         return base_summary
 
-    def _build_key_points_text(self, document: Document) -> str:
-        if document.summary is None or not document.summary.key_points:
+    def _build_key_points_text(
+        self,
+        document: Document,
+        review_service: DatabaseReviewService | None = None,
+    ) -> str:
+        if document.summary is None:
             return ""
-        return " ".join(str(point).strip() for point in document.summary.key_points if str(point).strip())
+        effective_values = self._get_summary_effective_values(document.summary, review_service)
+        key_points = effective_values.get("key_points") or []
+        return " ".join(str(point).strip() for point in key_points if str(point).strip())
 
     def _build_brief_search_text(self, brief: DailyBrief) -> str:
         values = [

@@ -145,3 +145,23 @@ POST /api/v1/reviews/{edit_id}/revert
 2. **集成到业务服务**：在摘要生成、机会评分等模块中调用 `get_effective_value` 实现人工覆盖。
 3. **前端对接**：基于 API 开发简易管理界面，供人工修订使用。
 4. **监控与告警**：添加修订操作的日志和监控，便于追踪异常。
+
+## 8. Latest Status Update (2026-04-28)
+
+The notes above include older-stage guidance. The current implementation status is:
+
+- `summary` has now been aligned with the same review override model used by `opportunities`, `risks`, and `uncertainties`.
+- `save_summary_review()` no longer writes directly back to `DocumentSummary`.
+- Summary manual edits are stored in `review_edits`.
+- Summary now supports:
+  - automatic value display
+  - effective value display
+  - `reset to auto`
+  - review history
+- Ask document evidence now consumes effective `summary` / `key_points` values instead of blindly trusting the persisted automatic summary fields.
+
+Current boundary:
+
+- historical summary rows that were directly overwritten in older flows are not retroactively repaired
+- for summary, `reset to auto` means returning to the current persisted summary baseline
+- this change is limited to Review / Web / Ask result assembly semantics and does not imply a main storage migration

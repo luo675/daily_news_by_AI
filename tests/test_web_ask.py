@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from src.admin import review_service_db
+from src.admin.review_schemas import OverrideStatus, ReviewHistoryResponse
 from src.api.app import create_app
 from src.api.routes import web as web_routes
 from src.domain.models import DailyBrief, Document, DocumentSummary, OpportunityAssessment, OpportunityEvidence, Source
@@ -109,6 +111,73 @@ def _build_brief() -> DailyBrief:
 class _DummySession:
     def close(self) -> None:
         return None
+
+
+class _FakeReviewWriteSession:
+    def __init__(self, *, opportunity: OpportunityAssessment | None = None, brief: DailyBrief | None = None):
+        self.opportunity = opportunity
+        self.brief = brief
+        self.closed = False
+        self.rolled_back = False
+
+    def get(self, model, object_id):
+        if self.opportunity is not None and object_id == self.opportunity.id:
+            return self.opportunity
+        if self.brief is not None and object_id == self.brief.id:
+            return self.brief
+        return None
+
+    def rollback(self) -> None:
+        self.rolled_back = True
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _StatefulFakeDatabaseReviewService:
+    overrides: dict[tuple[str, str, str], object] = {}
+
+    def __init__(self, session):
+        self.session = session
+
+    @classmethod
+    def reset(cls) -> None:
+        cls.overrides = {}
+
+    @staticmethod
+    def _key(target_type: str, target_id, field_name: str) -> tuple[str, str, str]:
+        return (target_type, str(target_id), field_name)
+
+    def get_effective_value(self, target_type, target_id, field_name, auto_value=None):
+        value = self.overrides.get(self._key(target_type, target_id, field_name), auto_value)
+        if value == review_service_db.RESET_TO_AUTO_SENTINEL:
+            return auto_value
+        return value
+
+    def get_override_status(self, target_type, target_id, field_name):
+        value = self.overrides.get(self._key(target_type, target_id, field_name))
+        source = "manual" if value not in {None, review_service_db.RESET_TO_AUTO_SENTINEL} else "auto"
+        return OverrideStatus(
+            field_name=field_name,
+            source=source,
+            last_manual_value=value if source == "manual" else None,
+            last_manual_at=None,
+            current_auto_value=None,
+        )
+
+    def create_batch(self, target_type, target_id, batch, reason=None):
+        for edit in batch:
+            self.overrides[self._key(target_type, target_id, edit.field_name)] = edit.new_value
+        return batch
+
+    def get_history(self, target_type, target_id, field_name=None):
+        return ReviewHistoryResponse(
+            target_type=target_type,
+            target_id=target_id,
+            edits=[],
+            total_count=0,
+            latest_values={},
+        )
 
 
 class _FakeQaHistoryScalarResult:
@@ -263,6 +332,405 @@ def test_ask_submit_renders_answer_mode_and_note(monkeypatch, workspace_tmp_path
     assert "mode=local_with_external_reasoning" in response.text
     assert "A focused local summary/key-point match was found." in response.text
     assert "Bounded answer from local evidence." in response.text
+
+
+def test_ask_submit_renders_structured_result_sections_and_status(monkeypatch, workspace_tmp_path: Path) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    monkeypatch.setattr(
+        web_routes.service,
+        "ask_question",
+        lambda question, provider_id="": {
+            "question": question,
+            "answer": "Structured answer body.",
+            "answer_mode": "local_fallback",
+            "provider_name": "Local QA Provider",
+            "note": "External provider failed, local answer returned.",
+            "error": "RuntimeError: provider timeout",
+            "created_at": "2026-04-28T01:02:03+00:00",
+            "evidence": [
+                {
+                    "document_id": str(uuid.uuid4()),
+                    "title": "Weekly AI coding tools update",
+                    "summary": "Reviewed opportunities: status=dismissed priority_score=8",
+                    "snippet": "A reviewed document snippet.",
+                    "match_basis": "key_point",
+                    "url": "https://example.com/ai-coding-tools",
+                },
+                {
+                    "title": "Daily Brief 2026-04-27",
+                    "summary": "Reviewed brief-only evidence.",
+                    "snippet": "",
+                    "match_basis": "summary",
+                    "url": None,
+                },
+            ],
+            "opportunities": [{"title": "Agentic code review"}],
+            "risks": [{"title": "Vendor dependence", "severity": "high"}],
+            "uncertainties": ["Benchmark quality remains unclear."],
+            "related_topics": ["AI coding tools", "Code review workflows"],
+            "meta": {"result_count": 2, "source_scope": "local_first"},
+        },
+    )
+
+    client = TestClient(create_app())
+    response = client.post(
+        "/web/ask",
+        data={"question": "What changed in AI coding tools this week?", "provider_id": ""},
+    )
+
+    assert response.status_code == 200
+    assert "fallback warning" in response.text
+    assert "Run Metadata" in response.text
+    assert "created_at=2026-04-28T01:02:03+00:00" in response.text
+    assert "Evidence" in response.text
+    assert "source=document" in response.text
+    assert "source=brief" in response.text
+    assert "match_basis=key_point" in response.text
+    assert "match_basis=summary" in response.text
+    assert "Opportunities" in response.text
+    assert "Risks" in response.text
+    assert "Uncertainties" in response.text
+    assert "Related Topics" in response.text
+    assert "Meta" in response.text
+
+
+def test_ask_submit_handles_empty_and_missing_fields_without_document_links(
+    monkeypatch,
+    workspace_tmp_path: Path,
+) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    monkeypatch.setattr(
+        web_routes.service,
+        "ask_question",
+        lambda question, provider_id="": {
+            "question": question,
+            "answer": "Bounded answer from brief evidence.",
+            "answer_mode": "insufficient_local_evidence",
+            "provider_name": None,
+            "note": "",
+            "error": None,
+            "evidence": [
+                {
+                    "title": "Daily Brief 2026-04-27",
+                    "summary": "Brief-only reviewed evidence.",
+                    "document_id": None,
+                },
+                {
+                    "title": "Untitled evidence",
+                },
+            ],
+            "opportunities": [],
+            "risks": None,
+            "uncertainties": [],
+            "related_topics": None,
+            "meta": {},
+        },
+    )
+
+    client = TestClient(create_app())
+    response = client.post(
+        "/web/ask",
+        data={"question": "What risks remain?", "provider_id": ""},
+    )
+
+    assert response.status_code == 200
+    assert "incomplete" in response.text
+    assert "Brief-only reviewed evidence." in response.text
+    assert "Untitled evidence" in response.text
+    assert "/web/documents/" not in response.text
+    assert "No opportunities extracted." in response.text
+    assert "No risks extracted." in response.text
+    assert "No uncertainties extracted." in response.text
+    assert "No related topics extracted." in response.text
+    assert "No metadata available." in response.text
+
+
+def test_ask_submit_renders_with_minimal_required_contract_fields(
+    monkeypatch,
+    workspace_tmp_path: Path,
+) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    monkeypatch.setattr(
+        web_routes.service,
+        "ask_question",
+        lambda question, provider_id="": {
+            "question": question,
+            "answer": "Minimal answer body.",
+        },
+    )
+
+    client = TestClient(create_app())
+    response = client.post(
+        "/web/ask",
+        data={"question": "What changed in AI coding tools this week?", "provider_id": ""},
+    )
+
+    assert response.status_code == 200
+    assert "Minimal answer body." in response.text
+    assert "local answer" in response.text
+    assert "mode=local_only" in response.text
+    assert "provider=-" in response.text
+    assert "No local evidence was available for this result." in response.text
+    assert "No opportunities extracted." in response.text
+    assert "No risks extracted." in response.text
+    assert "No uncertainties extracted." in response.text
+    assert "No related topics extracted." in response.text
+    assert "No metadata available." in response.text
+    assert "Error State" not in response.text
+
+
+def test_ask_question_uses_effective_summary_and_key_points_for_document_evidence(
+    monkeypatch,
+    workspace_tmp_path: Path,
+) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    _StatefulFakeDatabaseReviewService.reset()
+    service = WebMvpService()
+    document = _build_document(key_points=["Automatic key point about coding workflows."])
+
+    monkeypatch.setattr("src.web.service.DatabaseReviewService", _StatefulFakeDatabaseReviewService)
+    monkeypatch.setattr(service, "list_ai_providers", lambda: [])
+    monkeypatch.setattr(service, "search_documents_for_question", lambda question: ([document], None))
+    monkeypatch.setattr(service, "search_briefs_for_question", lambda question: ([], None), raising=False)
+    monkeypatch.setattr(service, "_try_create_db_session", lambda: _DummySession())
+
+    auto_result = service.ask_question("What changed in AI coding tools this week?")
+    assert auto_result["evidence"][0]["summary"] == "This document summarizes changes in AI coding tools."
+
+    summary = document.summary
+    assert summary is not None
+    _StatefulFakeDatabaseReviewService.overrides[("summary", str(summary.id), "summary_en")] = "Manual effective summary for AI coding tools."
+    _StatefulFakeDatabaseReviewService.overrides[("summary", str(summary.id), "key_points")] = [
+        "Manual key point about AI coding tools this week."
+    ]
+
+    manual_result = service.ask_question("What changed in AI coding tools this week?")
+    assert manual_result["evidence"][0]["summary"] == "Manual effective summary for AI coding tools."
+    assert manual_result["evidence"][0]["snippet"] == "Manual key point about AI coding tools this week."
+    assert manual_result["evidence"][0]["match_basis"] == "key_point"
+
+    _StatefulFakeDatabaseReviewService.overrides[("summary", str(summary.id), "summary_en")] = review_service_db.RESET_TO_AUTO_SENTINEL
+    _StatefulFakeDatabaseReviewService.overrides[("summary", str(summary.id), "key_points")] = review_service_db.RESET_TO_AUTO_SENTINEL
+
+    reset_result = service.ask_question("What changed in AI coding tools this week?")
+    assert reset_result["evidence"][0]["summary"] == "This document summarizes changes in AI coding tools."
+    assert "Manual effective summary" not in reset_result["evidence"][0]["summary"]
+
+
+def test_ask_reviewed_opportunity_evidence_round_trips_manual_override_and_reset(
+    monkeypatch,
+    workspace_tmp_path: Path,
+) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    _StatefulFakeDatabaseReviewService.reset()
+    service = WebMvpService()
+    document = _build_document()
+    opportunity = _build_opportunity(document)
+    document._ask_test_opportunities = [opportunity]
+
+    monkeypatch.setattr("src.web.service.DatabaseReviewService", _StatefulFakeDatabaseReviewService)
+    monkeypatch.setattr(service, "list_ai_providers", lambda: [])
+    monkeypatch.setattr(service, "search_documents_for_question", lambda question: ([document], None))
+    monkeypatch.setattr(service, "search_briefs_for_question", lambda question: ([], None), raising=False)
+    monkeypatch.setattr(service, "_try_create_db_session", lambda: _DummySession())
+
+    auto_result = service.ask_question("What changed in AI coding tools this week?")
+    assert "Reviewed opportunities:" in auto_result["evidence"][0]["summary"]
+    assert "status=candidate" in auto_result["evidence"][0]["summary"]
+    assert "priority_score=4" in auto_result["evidence"][0]["summary"]
+    assert "uncertainty_reason=" not in auto_result["evidence"][0]["summary"]
+
+    monkeypatch.setattr(service, "_require_session", lambda: _FakeReviewWriteSession(opportunity=opportunity))
+    message = service.save_opportunity_review(
+        str(opportunity.id),
+        {
+            "priority_score": "8",
+            "status": "dismissed",
+            "uncertainty": "true",
+            "uncertainty_reason": "Manual review: customer demand remains unproven.",
+            "reason": "Opportunity manual override",
+        },
+    )
+    assert message == "Opportunity review saved."
+
+    manual_result = service.ask_question("What changed in AI coding tools this week?")
+    assert "status=dismissed" in manual_result["evidence"][0]["summary"]
+    assert "priority_score=8" in manual_result["evidence"][0]["summary"]
+    assert "uncertainty=True" in manual_result["evidence"][0]["summary"]
+    assert "customer demand remains unproven" in manual_result["evidence"][0]["summary"]
+
+    monkeypatch.setattr(web_routes.service, "ask_question", service.ask_question)
+    client = TestClient(create_app())
+    response = client.post("/web/ask", data={"question": "What changed in AI coding tools this week?", "provider_id": ""})
+    assert response.status_code == 200
+    assert "status=dismissed" in response.text
+    assert "priority_score=8" in response.text
+    assert "customer demand remains unproven" in response.text
+
+    monkeypatch.setattr(service, "_require_session", lambda: _FakeReviewWriteSession(opportunity=opportunity))
+    reset_message = service.save_opportunity_review(
+        str(opportunity.id),
+        {
+            "priority_score": "",
+            "reset_priority_score": "on",
+            "status": "candidate",
+            "reset_status": "on",
+            "uncertainty": "false",
+            "reset_uncertainty": "on",
+            "uncertainty_reason": "",
+            "reset_uncertainty_reason": "on",
+            "reason": "Opportunity reset to auto",
+        },
+    )
+    assert reset_message == "Opportunity review saved."
+
+    reset_result = service.ask_question("What changed in AI coding tools this week?")
+    assert "status=candidate" in reset_result["evidence"][0]["summary"]
+    assert "priority_score=4" in reset_result["evidence"][0]["summary"]
+    assert "uncertainty=False" in reset_result["evidence"][0]["summary"]
+    assert "customer demand remains unproven" not in reset_result["evidence"][0]["summary"]
+
+
+def test_ask_reviewed_risk_evidence_round_trips_manual_override_and_reset(
+    monkeypatch,
+    workspace_tmp_path: Path,
+) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    _StatefulFakeDatabaseReviewService.reset()
+    service = WebMvpService()
+    brief = _build_brief()
+    route_id = str(
+        service._build_daily_brief_risk_target_id(
+            brief.id,
+            f"{service._build_daily_brief_risk_item_id(brief.risks[0])}:0",
+        )
+    )
+
+    monkeypatch.setattr("src.web.service.DatabaseReviewService", _StatefulFakeDatabaseReviewService)
+    monkeypatch.setattr(service, "list_ai_providers", lambda: [])
+    monkeypatch.setattr(service, "search_documents_for_question", lambda question: ([], None))
+    monkeypatch.setattr(service, "search_briefs_for_question", lambda question: ([brief], None), raising=False)
+    monkeypatch.setattr(service, "_try_create_db_session", lambda: _DummySession())
+
+    auto_result = service.ask_question("What risks remain in AI coding workflows?")
+    brief_evidence = next(item for item in auto_result["evidence"] if item["title"].startswith("Daily Brief"))
+    assert "severity=low" in brief_evidence["summary"]
+    assert "Current workflow depends on one hosted provider." in brief_evidence["summary"]
+
+    monkeypatch.setattr(service, "_require_session", lambda: _FakeReviewWriteSession(brief=brief))
+    message = service.save_risk_review(
+        str(brief.id),
+        route_id,
+        {
+            "severity": "high",
+            "description": "Manual review: concentration risk remains high.",
+            "reason": "Risk manual override",
+        },
+    )
+    assert message == "Risk review saved."
+
+    manual_result = service.ask_question("What risks remain in AI coding workflows?")
+    brief_evidence = next(item for item in manual_result["evidence"] if item["title"].startswith("Daily Brief"))
+    assert "severity=high" in brief_evidence["summary"]
+    assert "concentration risk remains high" in brief_evidence["summary"]
+
+    monkeypatch.setattr(web_routes.service, "ask_question", service.ask_question)
+    client = TestClient(create_app())
+    response = client.post("/web/ask", data={"question": "What risks remain in AI coding workflows?", "provider_id": ""})
+    assert response.status_code == 200
+    assert "severity=high" in response.text
+    assert "concentration risk remains high" in response.text
+
+    monkeypatch.setattr(service, "_require_session", lambda: _FakeReviewWriteSession(brief=brief))
+    reset_message = service.save_risk_review(
+        str(brief.id),
+        route_id,
+        {
+            "severity": "low",
+            "reset_severity": "on",
+            "description": "",
+            "reset_description": "on",
+            "reason": "Risk reset to auto",
+        },
+    )
+    assert reset_message == "Risk review saved."
+
+    reset_result = service.ask_question("What risks remain in AI coding workflows?")
+    brief_evidence = next(item for item in reset_result["evidence"] if item["title"].startswith("Daily Brief"))
+    assert "severity=low" in brief_evidence["summary"]
+    assert "Current workflow depends on one hosted provider." in brief_evidence["summary"]
+    assert "concentration risk remains high" not in brief_evidence["summary"]
+
+
+def test_ask_reviewed_uncertainty_evidence_round_trips_manual_override_and_reset(
+    monkeypatch,
+    workspace_tmp_path: Path,
+) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    _StatefulFakeDatabaseReviewService.reset()
+    service = WebMvpService()
+    brief = _build_brief()
+    route_id = str(
+        service._build_daily_brief_uncertainty_target_id(
+            brief.id,
+            f"{service._build_daily_brief_uncertainty_item_id(brief.uncertainties[0])}:0",
+        )
+    )
+
+    monkeypatch.setattr("src.web.service.DatabaseReviewService", _StatefulFakeDatabaseReviewService)
+    monkeypatch.setattr(service, "list_ai_providers", lambda: [])
+    monkeypatch.setattr(service, "search_documents_for_question", lambda question: ([], None))
+    monkeypatch.setattr(service, "search_briefs_for_question", lambda question: ([brief], None), raising=False)
+    monkeypatch.setattr(service, "_try_create_db_session", lambda: _DummySession())
+
+    auto_result = service.ask_question("What uncertainties remain in AI coding workflows?")
+    brief_evidence = next(item for item in auto_result["evidence"] if item["title"].startswith("Daily Brief"))
+    assert "Long-term review accuracy remains unclear." in brief_evidence["summary"]
+    assert "status=watching" not in brief_evidence["summary"]
+
+    monkeypatch.setattr(service, "_require_session", lambda: _FakeReviewWriteSession(brief=brief))
+    message = service.save_uncertainty_review(
+        str(brief.id),
+        route_id,
+        {
+            "uncertainty_note": "Manual review: benchmark quality is still unclear.",
+            "uncertainty_status": "watching",
+            "reason": "Uncertainty manual override",
+        },
+    )
+    assert message == "Uncertainty review saved."
+
+    manual_result = service.ask_question("What uncertainties remain in AI coding workflows?")
+    brief_evidence = next(item for item in manual_result["evidence"] if item["title"].startswith("Daily Brief"))
+    assert "benchmark quality is still unclear" in brief_evidence["summary"]
+    assert "status=watching" in brief_evidence["summary"]
+
+    monkeypatch.setattr(web_routes.service, "ask_question", service.ask_question)
+    client = TestClient(create_app())
+    response = client.post("/web/ask", data={"question": "What uncertainties remain in AI coding workflows?", "provider_id": ""})
+    assert response.status_code == 200
+    assert "benchmark quality is still unclear" in response.text
+    assert "status=watching" in response.text
+
+    monkeypatch.setattr(service, "_require_session", lambda: _FakeReviewWriteSession(brief=brief))
+    reset_message = service.save_uncertainty_review(
+        str(brief.id),
+        route_id,
+        {
+            "uncertainty_note": "",
+            "reset_uncertainty_note": "on",
+            "uncertainty_status": "resolved",
+            "reset_uncertainty_status": "on",
+            "reason": "Uncertainty reset to auto",
+        },
+    )
+    assert reset_message == "Uncertainty review saved."
+
+    reset_result = service.ask_question("What uncertainties remain in AI coding workflows?")
+    brief_evidence = next(item for item in reset_result["evidence"] if item["title"].startswith("Daily Brief"))
+    assert "Long-term review accuracy remains unclear." in brief_evidence["summary"]
+    assert "benchmark quality is still unclear" not in brief_evidence["summary"]
+    assert "status=watching" not in brief_evidence["summary"]
 
 
 def test_ask_question_returns_insufficient_local_evidence_without_external_call(

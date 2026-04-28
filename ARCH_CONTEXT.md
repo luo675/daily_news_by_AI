@@ -1029,3 +1029,75 @@ See:
 > 不要把这个任务扩成“替换主存储模式”或“引入新的主知识引擎”。  
 > 如未来要支持 HTML snapshot / PDF / image / raw asset，再单独定义最小 local asset storage 边界。  
 > 如果继续沿网页产品主线推进，优先阅读 `docs/ask_result_display_optimization.md`，从 Ask 页面结果展示优化起手。
+
+---
+
+## 7. Latest Progress Addendum (2026-04-28)
+
+This addendum overrides older notes that still describe Ask result display optimization or summary review alignment as unfinished.
+
+### Completed in this round
+
+- Ask result display optimization was completed and accepted.
+- The `/web/ask` page contract was documented and stabilized.
+- Ask reviewed-evidence verification now explicitly covers:
+  - `opportunities`
+  - `risks`
+  - `uncertainties`
+  - auto value -> manual override -> `reset to auto`
+- `summary` is now formally aligned with the same review override model:
+  - automatic value stays read-only
+  - manual edits write only to `review_edits`
+  - `reset to auto` is supported
+  - Review UI shows auto/effective comparison
+  - Ask document evidence consumes effective `summary` / `key_points`
+
+### Updated stable understanding
+
+At the current stage, the Web MVP should be understood as:
+
+- `Web MVP baseline stable`
+- Ask display optimization is no longer the active unfinished gap
+- Ask history is already `DB-first + JSON fallback`
+- AI provider config is already `DB-first + JSON fallback`
+- Review and Ask now share a mostly unified manual-correction loop across:
+  - `summary`
+  - `opportunities`
+  - `risks`
+  - `uncertainties`
+
+### Important boundary that remains
+
+- Do not retroactively repair historical `summary` rows that were directly overwritten in older flows.
+- Current `reset to auto` for summary means “return to the current persisted summary baseline”.
+- Do not reopen as default next tasks:
+  - Ask display optimization
+  - Ask history DB migration
+  - AI provider config DB migration
+  - summary review alignment
+
+### Updated next-session starting point
+
+The next session should no longer start from “finish Ask display” or “align summary review semantics”.
+
+Use this rule instead:
+
+1. If the goal is content maintenance:
+   - continue `baseline maintenance`
+   - re-check formal seed baseline
+   - observe deferred candidates such as `what-openai-did`
+2. If the goal is Web/product iteration:
+   - treat Review + Ask core manual-correction semantics as already established
+   - prioritize quality/efficiency work on top of the existing baseline
+   - do not restart information-architecture debates for Ask / Review / AI Settings
+
+### Direct handoff prompt for the next AI
+
+> Read `ARCH_CONTEXT.md` first.
+> Current project status is no longer “finish Ask display optimization” or “align summary review”.
+> The accurate understanding is:
+> `Web MVP baseline stable + Ask display accepted + Ask contract stabilized + review-to-Ask effective-value loop validated + summary/opportunities/risks/uncertainties all aligned to the same review override model`.
+>
+> Do not reopen Ask display optimization, Ask history DB migration, AI provider config DB migration, or summary review alignment as the default next step.
+> If the session goal is content maintenance, continue baseline maintenance.
+> If the session goal is Web/product iteration, start from the next highest-value quality/efficiency task on top of the already-stable Review/Ask baseline.

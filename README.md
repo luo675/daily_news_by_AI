@@ -233,3 +233,27 @@ pytest tests -q
 - [docs/api_spec.md](./docs/api_spec.md)
 - [docs/testing_strategy.md](./docs/testing_strategy.md)
 - [docs/review_implementation.md](./docs/review_implementation.md)
+
+## Latest Status Update (2026-04-28)
+
+This section supplements the older progress summary above.
+
+- Ask result display optimization has been completed and accepted.
+- The `/web/ask` page contract is now documented, including required fields, optional fields, and downgrade behavior for missing data.
+- Ask history is already `DB-first + JSON fallback`.
+- AI provider config is already `DB-first + JSON fallback`.
+- Review and Ask now share a mostly unified manual-correction loop across:
+  - `summary`
+  - `opportunities`
+  - `risks`
+  - `uncertainties`
+
+What this means in practice:
+
+- auto values remain read-only
+- manual changes are stored in `review_edits`
+- effective values are resolved at read time
+- `reset to auto` is supported
+- Ask consumes effective values instead of blindly trusting raw automatic output
+
+For the latest handoff status and the most reasonable next-session starting point, always prefer [ARCH_CONTEXT.md](./ARCH_CONTEXT.md).
