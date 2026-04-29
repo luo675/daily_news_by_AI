@@ -179,6 +179,10 @@ class WebMvpService:
         sources, error = self.list_sources()
         return [self._build_source_view(source) for source in sources], error
 
+    def list_source_page_views(self) -> tuple[list[dict[str, Any]], str | None]:
+        sources, error = self.list_sources()
+        return [self._build_source_page_view(source) for source in sources], error
+
     def get_source(self, source_id: str) -> tuple[Source | None, str | None]:
         return self._run_db_read(
             lambda session: session.get(Source, uuid.UUID(source_id)),
@@ -190,6 +194,12 @@ class WebMvpService:
         if source is None:
             return None, error
         return self._build_source_view(source), error
+
+    def get_source_page_view(self, source_id: str) -> tuple[dict[str, Any] | None, str | None]:
+        source, error = self.get_source(source_id)
+        if source is None:
+            return None, error
+        return self._build_source_page_view(source), error
 
     def create_source(self, form: dict[str, str]) -> str:
         session = self._require_session()
@@ -383,6 +393,36 @@ class WebMvpService:
 
         return self._run_db_read(_query, empty=[])
 
+    def list_document_views(self, query: str = "", source_id: str = "") -> tuple[list[dict[str, Any]], str | None]:
+        def _query(session: Session) -> list[dict[str, Any]]:
+            stmt = (
+                select(Document)
+                .options(
+                    selectinload(Document.source),
+                    selectinload(Document.summary),
+                    selectinload(Document.document_entities).selectinload(DocumentEntity.entity),
+                    selectinload(Document.document_topics).selectinload(DocumentTopic.topic),
+                )
+                .order_by(Document.created_at.desc())
+                .limit(50)
+            )
+            if query.strip():
+                pattern = f"%{query.strip()}%"
+                stmt = stmt.where(
+                    or_(
+                        Document.title.ilike(pattern),
+                        Document.content_text.ilike(pattern),
+                        Document.url.ilike(pattern),
+                    )
+                )
+            if source_id.strip():
+                stmt = stmt.where(Document.source_id == uuid.UUID(source_id))
+            documents = list(session.scalars(stmt))
+            review_service = DatabaseReviewService(session)
+            return [self._build_document_list_view(document, review_service) for document in documents]
+
+        return self._run_db_read(_query, empty=[])
+
     def get_document(self, document_id: str) -> tuple[Document | None, str | None]:
         def _query(session: Session) -> Document | None:
             stmt = (
@@ -396,6 +436,26 @@ class WebMvpService:
                 .where(Document.id == uuid.UUID(document_id))
             )
             return session.scalar(stmt)
+
+        return self._run_db_read(_query, empty=None)
+
+    def get_document_view(self, document_id: str) -> tuple[dict[str, Any] | None, str | None]:
+        def _query(session: Session) -> dict[str, Any] | None:
+            stmt = (
+                select(Document)
+                .options(
+                    selectinload(Document.source),
+                    selectinload(Document.summary),
+                    selectinload(Document.document_entities).selectinload(DocumentEntity.entity),
+                    selectinload(Document.document_topics).selectinload(DocumentTopic.topic),
+                )
+                .where(Document.id == uuid.UUID(document_id))
+            )
+            document = session.scalar(stmt)
+            if document is None:
+                return None
+            review_service = DatabaseReviewService(session)
+            return self._build_document_detail_view(document, review_service)
 
         return self._run_db_read(_query, empty=None)
 
@@ -1083,7 +1143,7 @@ class WebMvpService:
             "watchlist": 0,
             "reviews": 0,
         }
-        recent_documents: list[Document] = []
+        recent_documents: list[dict[str, Any]] = []
         top_topics: list[tuple[str, int]] = []
         db_error = None
         session = self._try_create_db_session()
@@ -1092,13 +1152,8 @@ class WebMvpService:
                 counts["sources"] = int(session.scalar(select(func.count()).select_from(Source)) or 0)
                 counts["documents"] = int(session.scalar(select(func.count()).select_from(Document)) or 0)
                 counts["watchlist"] = int(session.scalar(select(func.count()).select_from(WatchlistItem)) or 0)
-                counts["reviews"] = int(
-                    session.scalar(
-                        select(func.count()).select_from(ReviewEdit).where(ReviewEdit.target_type == "summary")
-                    )
-                    or 0
-                )
-                recent_documents = list(
+                counts["reviews"] = int(session.scalar(select(func.count()).select_from(ReviewEdit)) or 0)
+                raw_recent_documents = list(
                     session.scalars(
                         select(Document)
                         .options(selectinload(Document.summary), selectinload(Document.source))
@@ -1106,6 +1161,11 @@ class WebMvpService:
                         .limit(5)
                     )
                 )
+                review_service = DatabaseReviewService(session)
+                recent_documents = [
+                    self._build_dashboard_recent_document_view(document, review_service)
+                    for document in raw_recent_documents
+                ]
                 topic_rows = session.execute(
                     select(Topic.name_en, func.count(DocumentTopic.id))
                     .join(DocumentTopic, DocumentTopic.topic_id == Topic.id)
@@ -1121,13 +1181,21 @@ class WebMvpService:
         else:
             db_error = "Database session unavailable."
 
+        providers = self.list_ai_providers()
+        qa_history = self.list_qa_history()[:5]
+
         return {
             "counts": counts,
             "recent_documents": recent_documents,
             "top_topics": top_topics,
-            "providers": self.list_ai_providers(),
-            "qa_history": self.list_qa_history()[:5],
+            "providers": providers,
+            "qa_history": qa_history,
             "db_error": db_error,
+            "system_status": self._build_dashboard_system_status(
+                db_error=db_error,
+                providers=providers,
+                recent_documents=recent_documents,
+            ),
         }
 
     def get_system_status(self) -> dict[str, Any]:
@@ -1152,6 +1220,7 @@ class WebMvpService:
             )
 
         counts: dict[str, int] = {}
+        counts_error: str | None = None
         session = self._try_create_db_session()
         if session is not None:
             try:
@@ -1164,10 +1233,13 @@ class WebMvpService:
                     "watchlist": int(session.scalar(select(func.count()).select_from(WatchlistItem)) or 0),
                     "review_edits": int(session.scalar(select(func.count()).select_from(ReviewEdit)) or 0),
                 }
-            except Exception:
+            except Exception as exc:
                 counts = {}
+                counts_error = f"{type(exc).__name__}: {exc}"
             finally:
                 session.close()
+        else:
+            counts_error = "Database session unavailable."
 
         return {
             "database_environment": environment_result,
@@ -1175,6 +1247,36 @@ class WebMvpService:
             "pgvector": vector_result,
             "files": file_status,
             "counts": counts,
+            "counts_error": counts_error,
+        }
+
+    def get_system_page_data(self) -> dict[str, Any]:
+        status = self.get_system_status()
+        checks = [
+            self._build_system_check_view("Database environment", status.get("database_environment")),
+            self._build_system_check_view("Database connection", status.get("database_connection")),
+            self._build_system_check_view("pgvector", status.get("pgvector")),
+        ]
+        storage_files = [
+            {
+                "path": self._coalesce_text(item.get("path"), default="-"),
+                "exists_label": "yes" if bool(item.get("exists")) else "no",
+                "size_bytes": int(item.get("size_bytes") or 0),
+            }
+            for item in status.get("files") or []
+        ]
+        database_counts = [
+            {"name": str(name), "count": int(count)}
+            for name, count in (status.get("counts") or {}).items()
+        ]
+        counts_error = None
+        if not database_counts:
+            counts_error = str(status.get("counts_error") or "").strip() or self._infer_system_counts_error(checks)
+        return {
+            "checks": checks,
+            "database_counts": database_counts,
+            "counts_error": counts_error,
+            "storage_files": storage_files,
         }
 
     def list_source_type_values(self) -> list[str]:
@@ -1611,6 +1713,21 @@ class WebMvpService:
         effective_values = self._get_summary_effective_values(document.summary, review_service)
         return str(effective_values.get("summary_en") or effective_values.get("summary_zh") or "")
 
+    def _build_document_summary_text(
+        self,
+        document: Document,
+        review_service: DatabaseReviewService | None = None,
+    ) -> str:
+        summary_text = self._build_summary_text(document, review_service).strip()
+        if summary_text:
+            return summary_text
+        if document.summary is None:
+            return ""
+        effective_values = self._get_summary_effective_values(document.summary, review_service)
+        key_points = effective_values.get("key_points") or []
+        normalized_key_points = [str(point).strip() for point in key_points if str(point).strip()]
+        return "; ".join(normalized_key_points)
+
     def _get_summary_auto_values(self, summary: DocumentSummary) -> dict[str, Any]:
         return {
             "summary_zh": summary.summary_zh,
@@ -1678,6 +1795,183 @@ class WebMvpService:
         effective_values = self._get_summary_effective_values(document.summary, review_service)
         key_points = effective_values.get("key_points") or []
         return " ".join(str(point).strip() for point in key_points if str(point).strip())
+
+    def _build_document_list_view(
+        self,
+        document: Document,
+        review_service: DatabaseReviewService | None = None,
+    ) -> dict[str, Any]:
+        key_points = self._get_document_effective_key_points(document, review_service)
+        return {
+            "id": str(document.id),
+            "title": self._coalesce_text(document.title, default="Untitled document"),
+            "source_name": self._coalesce_text(document.source.name if document.source else None),
+            "status": self._coalesce_text(document.status),
+            "language": self._coalesce_text(document.language),
+            "published_at": self._coalesce_text(str(document.published_at) if document.published_at else None),
+            "summary_text": self._coalesce_text(
+                self._truncate_text(self._build_document_summary_text(document, review_service), limit=160)
+            ),
+            "key_points": key_points,
+            "created_at": self._coalesce_text(str(document.created_at) if document.created_at else None),
+        }
+
+    def _build_document_detail_view(
+        self,
+        document: Document,
+        review_service: DatabaseReviewService | None = None,
+    ) -> dict[str, Any]:
+        effective_values = (
+            self._get_summary_effective_values(document.summary, review_service)
+            if document.summary is not None
+            else {"summary_en": "", "summary_zh": "", "key_points": []}
+        )
+        entity_labels = [self._build_entity_label(link.entity) for link in document.document_entities or []]
+        topic_labels = [self._build_topic_label(link.topic) for link in document.document_topics or []]
+        return {
+            "id": str(document.id),
+            "title": self._coalesce_text(document.title, default="Untitled document"),
+            "source_name": self._coalesce_text(document.source.name if document.source else None),
+            "url": self._coalesce_text(document.url, default=""),
+            "status": self._coalesce_text(document.status),
+            "language": self._coalesce_text(document.language),
+            "published_at": self._coalesce_text(str(document.published_at) if document.published_at else None),
+            "summary_en": self._coalesce_text(effective_values.get("summary_en"), default=""),
+            "summary_zh": self._coalesce_text(effective_values.get("summary_zh"), default=""),
+            "key_points": self._normalize_string_list(effective_values.get("key_points")),
+            "entities": entity_labels,
+            "topics": topic_labels,
+            "content_preview": self._coalesce_text(
+                self._truncate_text(document.content_text or "", limit=2400),
+                default="",
+            ),
+        }
+
+    def _build_dashboard_recent_document_view(
+        self,
+        document: Document,
+        review_service: DatabaseReviewService | None = None,
+    ) -> dict[str, Any]:
+        summary_text = self._build_document_summary_text(document, review_service)
+        return {
+            "id": str(document.id),
+            "title": self._coalesce_text(document.title, default="Untitled document"),
+            "source_name": self._coalesce_text(document.source.name if document.source else None),
+            "created_at": self._coalesce_text(str(document.created_at) if document.created_at else None),
+            "published_at": self._coalesce_text(str(document.published_at) if document.published_at else None),
+            "status": self._coalesce_text(document.status),
+            "summary_text": self._coalesce_text(self._truncate_text(summary_text, limit=160), default="-"),
+        }
+
+    def _build_dashboard_system_status(
+        self,
+        *,
+        db_error: str | None,
+        providers: list[ProviderConfig],
+        recent_documents: list[dict[str, Any]],
+    ) -> dict[str, str]:
+        enabled_providers = [provider for provider in providers if provider.is_enabled]
+        if db_error:
+            database_label = "degraded"
+            database_detail = db_error
+            knowledge_label = "Recent knowledge changes are unavailable."
+        else:
+            database_label = "available"
+            database_detail = "Counts and recent knowledge changes are available."
+            knowledge_label = self._format_dashboard_knowledge_label(recent_documents)
+        provider_label = self._format_dashboard_provider_label(enabled_providers, providers)
+        return {
+            "database_label": database_label,
+            "database_detail": database_detail,
+            "provider_label": provider_label,
+            "knowledge_label": knowledge_label,
+        }
+
+    def _format_dashboard_provider_label(
+        self,
+        enabled_providers: list[ProviderConfig],
+        providers: list[ProviderConfig],
+    ) -> str:
+        if enabled_providers:
+            count = len(enabled_providers)
+            noun = "provider" if count == 1 else "providers"
+            return f"{count} {noun} enabled"
+        if providers:
+            return "Providers configured but currently disabled"
+        return "No provider configured"
+
+    def _format_dashboard_knowledge_label(self, recent_documents: list[dict[str, Any]]) -> str:
+        count = len(recent_documents)
+        if count == 0:
+            return "No recent knowledge changes yet."
+        noun = "document" if count == 1 else "documents"
+        return f"{count} recent {noun} available in the dashboard"
+
+    def _build_system_check_view(self, label: str, result: Any) -> dict[str, str]:
+        ok = bool(getattr(result, "ok", False))
+        detail = self._coalesce_text(getattr(result, "detail", None))
+        return {
+            "label": label,
+            "status": "available" if ok else "degraded",
+            "detail": detail,
+        }
+
+    def _infer_system_counts_error(self, checks: list[dict[str, str]]) -> str | None:
+        degraded_details = [
+            check["detail"]
+            for check in checks
+            if check.get("status") == "degraded" and str(check.get("detail") or "").strip()
+        ]
+        if degraded_details:
+            return degraded_details[0]
+        return None
+
+    def _get_document_effective_key_points(
+        self,
+        document: Document,
+        review_service: DatabaseReviewService | None = None,
+    ) -> list[str]:
+        if document.summary is None:
+            return []
+        effective_values = self._get_summary_effective_values(document.summary, review_service)
+        return self._normalize_string_list(effective_values.get("key_points"))
+
+    def _build_entity_label(self, entity: Entity | None) -> str:
+        if entity is None:
+            return "Unnamed entity"
+        name = self._coalesce_text(getattr(entity, "name", None), default="")
+        entity_type = self._coalesce_text(getattr(entity, "entity_type", None), default="")
+        if name and entity_type:
+            return f"{name} ({entity_type})"
+        if name:
+            return name
+        return "Unnamed entity"
+
+    def _build_topic_label(self, topic: Topic | None) -> str:
+        if topic is None:
+            return "Unnamed topic"
+        label = self._coalesce_text(
+            getattr(topic, "name_en", None) or getattr(topic, "name_zh", None),
+            default="",
+        )
+        return label or "Unnamed topic"
+
+    def _normalize_string_list(self, value: Any, *, fallback: str | None = None) -> list[str]:
+        items = value if isinstance(value, list) else []
+        normalized = [str(item).strip() for item in items if str(item).strip()]
+        if normalized:
+            return normalized
+        return [fallback] if fallback else []
+
+    def _coalesce_text(self, value: Any, *, default: str = "-") -> str:
+        text = str(value or "").strip()
+        return text or default
+
+    def _truncate_text(self, value: Any, *, limit: int) -> str:
+        text = str(value or "").strip()
+        if len(text) <= limit:
+            return text
+        return f"{text[: max(limit - 1, 0)].rstrip()}..."
 
     def _build_brief_search_text(self, brief: DailyBrief) -> str:
         values = [
@@ -2227,6 +2521,25 @@ class WebMvpService:
             last_result=meta.get("last_result"),
             raw_config_json=raw_config_json,
         )
+
+    def _build_source_page_view(self, source: Source) -> dict[str, Any]:
+        source_view = self._build_source_view(source)
+        return {
+            "id": str(source.id),
+            "name": self._coalesce_text(source.name, default="Unnamed source"),
+            "editable_name": str(source.name or ""),
+            "source_type": self._coalesce_text(source.source_type),
+            "url": self._coalesce_text(source.url),
+            "credibility_level": self._coalesce_text(source.credibility_level),
+            "fetch_strategy": self._coalesce_text(source.fetch_strategy),
+            "is_active": bool(source.is_active),
+            "activity_label": "active" if source.is_active else "disabled",
+            "maintenance_status": self._coalesce_text(source_view.maintenance_status, default="ordinary"),
+            "notes": str(source_view.notes or "").strip(),
+            "last_import_at": self._coalesce_text(source_view.last_import_at),
+            "last_result": self._coalesce_text(source_view.last_result),
+            "raw_config_json": source_view.raw_config_json,
+        }
 
     def _get_source_web_metadata(self, source: Source) -> dict[str, Any]:
         config = source.config or {}

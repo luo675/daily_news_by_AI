@@ -1460,7 +1460,23 @@ def test_review_page_renders_empty_state_with_shared_review_language(
     response = client.get("/web/review")
 
     assert response.status_code == 200
-    assert "No reviewed summaries, opportunities, risks, or uncertainties are available." in response.text
+    assert "No review items available." in response.text
+
+
+def test_review_page_renders_shared_database_note(monkeypatch, workspace_tmp_path: Path) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    monkeypatch.setattr(web_routes.service, "list_review_uncertainties", lambda: ([], "Database session unavailable."))
+    monkeypatch.setattr(web_routes.service, "list_review_risks", lambda: ([], None))
+    monkeypatch.setattr(web_routes.service, "list_review_opportunities", lambda: ([], None))
+    monkeypatch.setattr(web_routes.service, "list_review_documents", lambda: ([], None))
+
+    client = TestClient(create_app())
+    response = client.get("/web/review")
+
+    assert response.status_code == 200
+    assert "Database note:" in response.text
+    assert "Some page data is unavailable." in response.text
+    assert "Database session unavailable." in response.text
 
 
 def test_review_page_submit_uncertainty_includes_reset_flags(monkeypatch, workspace_tmp_path: Path) -> None:

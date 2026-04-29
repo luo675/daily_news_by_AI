@@ -115,6 +115,25 @@ def _render_meta_section(meta: object) -> str:
     return _render_definition_rows([(str(key), value) for key, value in meta.items()])
 
 
+def _render_database_note(detail: str | None) -> str:
+    text = str(detail or "").strip()
+    if not text:
+        return ""
+    return (
+        "<div class='card'><strong>Database note:</strong> "
+        "Some page data is unavailable. "
+        f"{escape(text)}</div>"
+    )
+
+
+def _empty_table_row(message: str, *, colspan: int) -> str:
+    return f"<tr><td colspan='{colspan}'>{escape(message)}</td></tr>"
+
+
+def _empty_list_item(message: str) -> str:
+    return f"<li>{escape(message)}</li>"
+
+
 def _format_ask_provider_name(value: object) -> str:
     text = str(value or "").strip()
     return text or "default/local only"
@@ -167,7 +186,7 @@ def _build_ask_status(result: dict[str, object]) -> tuple[str, str]:
 def _render_ask_evidence(items: object) -> str:
     evidence_items = _coerce_items(items)
     if not evidence_items:
-        return "<div class='muted'>No local evidence was attached to this answer.</div>"
+        return "<div class='muted'>No evidence available for this answer.</div>"
     cards: list[str] = []
     for raw_item in evidence_items:
         item = raw_item if isinstance(raw_item, dict) else {"title": str(raw_item)}
@@ -333,29 +352,29 @@ async def web_index() -> RedirectResponse:
 async def dashboard(message: str | None = None) -> HTMLResponse:
     data = service.get_dashboard_data()
     counts = data["counts"]
+    system_status = data.get("system_status") or {}
     docs_html = "".join(
-        f"<tr><td><a href='/web/documents/{doc.id}'>{escape(doc.title)}</a></td>"
-        f"<td>{escape(doc.source.name if doc.source else '-')}</td>"
-        f"<td>{escape(str(doc.created_at))}</td></tr>"
+        f"<tr><td><a href='/web/documents/{escape(str(doc['id']))}'>{escape(str(doc['title']))}</a></td>"
+        f"<td>{escape(str(doc['source_name']))}</td>"
+        f"<td>{escape(str(doc.get('status', '-')))}</td>"
+        f"<td>{escape(str(doc.get('published_at', '-')))}</td>"
+        f"<td>{escape(str(doc['created_at']))}</td>"
+        f"<td>{escape(str(doc.get('summary_text', '-')))}</td></tr>"
         for doc in data["recent_documents"]
-    ) or "<tr><td colspan='3'>No documents yet.</td></tr>"
+    ) or _empty_table_row("No recent documents available.", colspan=6)
     topics_html = "".join(
         f"<li>{escape(name)} ({count})</li>" for name, count in data["top_topics"]
-    ) or "<li>No topic data.</li>"
+    ) or _empty_list_item("No topics available.")
     qa_html = "".join(
         f"<li><strong>{escape(item['question'])}</strong> <span class='muted'>[{escape(item['answer_mode'])}]</span></li>"
         for item in data["qa_history"]
-    ) or "<li>No Q&A history.</li>"
+    ) or _empty_list_item("No recent Q&A available.")
     provider_html = "".join(
         f"<li>{escape(provider.name)} - {escape(provider.model)}"
         f" <span class='muted'>(default={_bool_label(provider.is_default)}, enabled={_bool_label(provider.is_enabled)})</span></li>"
         for provider in data["providers"]
-    ) or "<li>No provider configured.</li>"
-    db_note = (
-        f"<div class='card'><strong>Database note:</strong> {escape(data['db_error'])}</div>"
-        if data["db_error"]
-        else ""
-    )
+    ) or _empty_list_item("No providers available.")
+    db_note = _render_database_note(data["db_error"])
     body = f"""
     <div class="grid cols-3">
       <div class="card"><div class="muted">Sources</div><div class="metric">{counts['sources']}</div></div>
@@ -366,9 +385,16 @@ async def dashboard(message: str | None = None) -> HTMLResponse:
     {db_note}
     <div class="grid cols-2" style="margin-top:16px;">
       <section class="card">
+        <h2>System Status</h2>
+        <div><strong>Database:</strong> {escape(str(system_status.get('database_label') or 'unknown'))}</div>
+        <div class="muted">{escape(str(system_status.get('database_detail') or 'No database detail available.'))}</div>
+        <div style="margin-top:10px;"><strong>Providers:</strong> {escape(str(system_status.get('provider_label') or 'No provider status available.'))}</div>
+        <div><strong>Knowledge:</strong> {escape(str(system_status.get('knowledge_label') or 'No knowledge status available.'))}</div>
+      </section>
+      <section class="card">
         <h2>Recent Documents</h2>
         <table>
-          <thead><tr><th>Title</th><th>Source</th><th>Created</th></tr></thead>
+          <thead><tr><th>Title</th><th>Source</th><th>Status</th><th>Published</th><th>Created</th><th>Summary</th></tr></thead>
           <tbody>{docs_html}</tbody>
         </table>
       </section>
@@ -387,27 +413,27 @@ async def dashboard(message: str | None = None) -> HTMLResponse:
 
 @router.get("/web/sources")
 async def sources_page(message: str | None = None) -> HTMLResponse:
-    sources, error = service.list_source_views()
+    sources, error = service.list_source_page_views()
     rows = "".join(
         f"<tr>"
-        f"<td><a href='/web/sources/{source.source.id}'>{escape(source.source.name)}</a></td>"
-        f"<td>{escape(source.source.source_type)}</td>"
-        f"<td>{escape(source.source.url or '-')}</td>"
-        f"<td>{escape(source.source.credibility_level)}</td>"
-        f"<td>{escape(source.source.fetch_strategy)}</td>"
-        f"<td>{escape('active' if source.source.is_active else 'disabled')}</td>"
-        f"<td>{escape(source.maintenance_status)}</td>"
-        f"<td>{escape(source.last_import_at or '-')}</td>"
-        f"<td>{escape(source.last_result or '-')}</td>"
+        f"<td><a href='/web/sources/{escape(str(source['id']))}'>{escape(str(source['name']))}</a></td>"
+        f"<td>{escape(str(source['source_type']))}</td>"
+        f"<td>{escape(str(source['url']))}</td>"
+        f"<td>{escape(str(source['credibility_level']))}</td>"
+        f"<td>{escape(str(source['fetch_strategy']))}</td>"
+        f"<td>{escape(str(source['activity_label']))}</td>"
+        f"<td>{escape(str(source['maintenance_status']))}</td>"
+        f"<td>{escape(str(source['last_import_at']))}</td>"
+        f"<td>{escape(str(source['last_result']))}</td>"
         f"<td>"
-        f"<a class='nav-link' href='/web/sources/{source.source.id}'>Edit</a> "
-        f"<form class='inline' method='post' action='/web/sources/{source.source.id}/toggle'><button>Toggle</button></form> "
-        f"<form class='inline' method='post' action='/web/sources/{source.source.id}/import'><button>Import</button></form>"
+        f"<a class='nav-link' href='/web/sources/{escape(str(source['id']))}'>Edit</a> "
+        f"<form class='inline' method='post' action='/web/sources/{escape(str(source['id']))}/toggle'><button>Toggle</button></form> "
+        f"<form class='inline' method='post' action='/web/sources/{escape(str(source['id']))}/import'><button>Import</button></form>"
         f"</td>"
         f"</tr>"
         for source in sources
-    ) or "<tr><td colspan='10'>No sources found.</td></tr>"
-    error_html = f"<div class='card'><strong>Database note:</strong> {escape(error)}</div>" if error else ""
+    ) or _empty_table_row("No sources available.", colspan=10)
+    error_html = _render_database_note(error)
     source_type_options = "".join(
         f"<option value='{escape(value)}'>{escape(value)}</option>" for value in service.list_source_type_values()
     )
@@ -457,20 +483,19 @@ async def create_source(request: Request) -> RedirectResponse:
 
 @router.get("/web/sources/{source_id}")
 async def source_detail(source_id: str, message: str | None = None) -> HTMLResponse:
-    source_view, error = service.get_source_view(source_id)
+    source_view, error = service.get_source_page_view(source_id)
     if source_view is None:
         body = f"<div class='card'>Source not found. {escape(error or '')}</div>"
         return _layout("Source Detail", body, message=message)
-    source = source_view.source
     source_type_options = "".join(
-        f"<option value='{escape(value)}'{' selected' if value == source.source_type else ''}>{escape(value)}</option>"
+        f"<option value='{escape(value)}'{' selected' if value == source_view['source_type'] else ''}>{escape(value)}</option>"
         for value in service.list_source_type_values()
     )
     credibility_options = "".join(
-        f"<option value='{escape(value)}'{' selected' if value == source.credibility_level else ''}>{escape(value)}</option>"
+        f"<option value='{escape(value)}'{' selected' if value == source_view['credibility_level'] else ''}>{escape(value)}</option>"
         for value in service.list_credibility_values()
     )
-    if source_view.maintenance_status == "formal_seed":
+    if source_view["maintenance_status"] == "formal_seed":
         maintenance_status_input = (
             f"<div class='pre'>formal_seed</div>"
             f"<input type='hidden' name='maintenance_status' value='formal_seed'>"
@@ -478,7 +503,7 @@ async def source_detail(source_id: str, message: str | None = None) -> HTMLRespo
         )
     else:
         maintenance_status_options = "".join(
-            f"<option value='{escape(value)}'{' selected' if value == source_view.maintenance_status else ''}>{escape(value)}</option>"
+            f"<option value='{escape(value)}'{' selected' if value == source_view['maintenance_status'] else ''}>{escape(value)}</option>"
             for value in service.list_web_assignable_maintenance_status_values()
         )
         maintenance_status_input = (
@@ -490,27 +515,29 @@ async def source_detail(source_id: str, message: str | None = None) -> HTMLRespo
       <section class="card">
         <h2>Edit Source</h2>
         <p class="muted">This form updates source configuration and observation notes. It is not the authority for formal seed promotion.</p>
-        <form method="post" action="/web/sources/{source.id}">
-          <input name="name" value="{escape(source.name)}" required>
+        <form method="post" action="/web/sources/{escape(str(source_view['id']))}">
+          <input name="name" value="{escape(str(source_view.get('editable_name', '')))}" required>
           <select name="source_type">{source_type_options}</select>
-          <input name="url" value="{escape(source.url or '')}" placeholder="https://example.com/article-or-homepage">
+          <input name="url" value="{escape('' if source_view['url'] == '-' else str(source_view['url']))}" placeholder="https://example.com/article-or-homepage">
           <select name="credibility_level">{credibility_options}</select>
-          <input name="fetch_strategy" value="{escape(source.fetch_strategy)}">
+          <input name="fetch_strategy" value="{escape('' if source_view['fetch_strategy'] == '-' else str(source_view['fetch_strategy']))}">
           {maintenance_status_input}
-          <textarea name="notes" placeholder="Maintenance notes">{escape(source_view.notes)}</textarea>
-          <textarea name="config_json" placeholder='Optional source config JSON'>{escape(source_view.raw_config_json)}</textarea>
-          <label><input type="checkbox" name="is_active" {'checked' if source.is_active else ''}> active</label>
+          <textarea name="notes" placeholder="Maintenance notes">{escape(str(source_view['notes']))}</textarea>
+          <textarea name="config_json" placeholder='Optional source config JSON'>{escape(str(source_view['raw_config_json']))}</textarea>
+          <label><input type="checkbox" name="is_active" {'checked' if source_view['is_active'] else ''}> active</label>
           <button>Save Source</button>
         </form>
       </section>
       <section class="card stack">
-        <div><strong>Maintenance status:</strong> {escape(source_view.maintenance_status)}</div>
-        <div><strong>Last import:</strong> {escape(source_view.last_import_at or '-')}</div>
-        <div><strong>Last result:</strong> {escape(source_view.last_result or '-')}</div>
-        <div><strong>Notes:</strong><div class="pre">{escape(source_view.notes or '-')}</div></div>
+        <div><strong>Source:</strong> {escape(str(source_view['name']))}</div>
+        <div><strong>Status:</strong> {escape(str(source_view['activity_label']))}</div>
+        <div><strong>Maintenance status:</strong> {escape(str(source_view['maintenance_status']))}</div>
+        <div><strong>Last import:</strong> {escape(str(source_view['last_import_at']))}</div>
+        <div><strong>Last result:</strong> {escape(str(source_view['last_result']))}</div>
+        <div><strong>Notes:</strong><div class="pre">{escape(str(source_view['notes'] or '-'))}</div></div>
         <div class="inline">
-          <form class='inline' method='post' action='/web/sources/{source.id}/toggle'><button>Toggle Active</button></form>
-          <form class='inline' method='post' action='/web/sources/{source.id}/import'><button>Import Now</button></form>
+          <form class='inline' method='post' action='/web/sources/{escape(str(source_view['id']))}/toggle'><button>Toggle Active</button></form>
+          <form class='inline' method='post' action='/web/sources/{escape(str(source_view['id']))}/import'><button>Import Now</button></form>
           <a href="/web/sources">Back to Sources</a>
         </div>
       </section>
@@ -541,23 +568,36 @@ async def documents_page(
     q: str = "",
     source_id: str = "",
 ) -> HTMLResponse:
-    documents, error = service.list_documents(query=q, source_id=source_id)
+    documents, error = service.list_document_views(query=q, source_id=source_id)
     sources, _ = service.list_sources()
     source_options = ["<option value=''>All sources</option>"]
+    selected_source_name = "All sources" if not source_id.strip() else "Unknown source filter"
     for source in sources:
         selected = " selected" if source_id == str(source.id) else ""
+        if selected:
+            selected_source_name = source.name
         source_options.append(f"<option value='{source.id}'{selected}>{escape(source.name)}</option>")
+    has_filters = bool(q.strip() or source_id.strip())
+    empty_message = "No documents matched the current filters." if has_filters else "No documents available."
     rows = "".join(
         f"<tr>"
-        f"<td><a href='/web/documents/{doc.id}'>{escape(doc.title)}</a></td>"
-        f"<td>{escape(doc.source.name if doc.source else '-')}</td>"
-        f"<td>{escape(doc.language or '-')}</td>"
-        f"<td>{escape(doc.status)}</td>"
-        f"<td>{escape((doc.summary.summary_en or doc.summary.summary_zh)[:160] if doc.summary and (doc.summary.summary_en or doc.summary.summary_zh) else '-')}</td>"
+        f"<td><a href='/web/documents/{escape(str(doc['id']))}'>{escape(str(doc['title']))}</a></td>"
+        f"<td>{escape(str(doc['source_name']))}</td>"
+        f"<td>{escape(str(doc['status']))}</td>"
+        f"<td>{escape(str(doc['language']))}</td>"
+        f"<td>{escape(str(doc.get('published_at', '-')))}</td>"
+        f"<td>{escape(str(doc['summary_text']))}</td>"
         f"</tr>"
         for doc in documents
-    ) or "<tr><td colspan='5'>No documents found.</td></tr>"
-    error_html = f"<div class='card'><strong>Database note:</strong> {escape(error)}</div>" if error else ""
+    ) or _empty_table_row(empty_message, colspan=6)
+    error_html = _render_database_note(error)
+    filters_html = f"""
+      <section class="card">
+        <h2>Filters currently applied</h2>
+        <div><strong>Query:</strong> {escape(q.strip() or "None")}</div>
+        <div><strong>Source:</strong> {escape(selected_source_name)}</div>
+      </section>
+    """
     body = f"""
     {error_html}
     <div class="grid cols-2">
@@ -569,10 +609,13 @@ async def documents_page(
           <button>Apply</button>
         </form>
       </section>
+      {filters_html}
+    </div>
+    <div class="grid" style="margin-top:16px;">
       <section class="card">
         <h2>Document List</h2>
         <table>
-          <thead><tr><th>Title</th><th>Source</th><th>Lang</th><th>Status</th><th>Summary</th></tr></thead>
+          <thead><tr><th>Title</th><th>Source</th><th>Status</th><th>Language</th><th>Published</th><th>Summary</th></tr></thead>
           <tbody>{rows}</tbody>
         </table>
       </section>
@@ -583,36 +626,34 @@ async def documents_page(
 
 @router.get("/web/documents/{document_id}")
 async def document_detail(document_id: str, message: str | None = None) -> HTMLResponse:
-    document, error = service.get_document(document_id)
+    document, error = service.get_document_view(document_id)
     if document is None:
         body = f"<div class='card'>Document not found. {escape(error or '')}</div>"
         return _layout("Document Detail", body, message=message)
-    entity_html = "".join(
-        f"<span class='chip'>{escape(link.entity.name)} ({escape(link.entity.entity_type)})</span>"
-        for link in document.document_entities
-    ) or "<span class='muted'>No entities.</span>"
-    topic_html = "".join(
-        f"<span class='chip'>{escape(link.topic.name_en or link.topic.name_zh or 'Unnamed')}</span>"
-        for link in document.document_topics
-    ) or "<span class='muted'>No topics.</span>"
-    key_points = "<br>".join(escape(point) for point in (document.summary.key_points if document.summary else []) or [])
+    entity_html = "".join(f"<span class='chip'>{escape(str(label))}</span>" for label in document["entities"])
+    topic_html = "".join(f"<span class='chip'>{escape(str(label))}</span>" for label in document["topics"])
+    key_points = "<br>".join(escape(str(point)) for point in document["key_points"])
+    url_value = str(document["url"]).strip()
+    url_html = f"<a href=\"{escape(url_value)}\">{escape(url_value)}</a>" if url_value else "-"
+    entities_block = entity_html or "<span class='muted'>No entities.</span>"
+    topics_block = topic_html or "<span class='muted'>No topics.</span>"
     body = f"""
     <div class="grid cols-2">
       <section class="card stack">
-        <div><strong>Title:</strong> {escape(document.title)}</div>
-        <div><strong>Source:</strong> {escape(document.source.name if document.source else '-')}</div>
-        <div><strong>URL:</strong> <a href="{escape(document.url or '#')}">{escape(document.url or '-')}</a></div>
-        <div><strong>Status:</strong> {escape(document.status)}</div>
-        <div><strong>Language:</strong> {escape(document.language or '-')}</div>
-        <div><strong>Published:</strong> {escape(str(document.published_at) if document.published_at else '-')}</div>
-        <div><strong>Summary EN:</strong><div class="pre">{escape(document.summary.summary_en if document.summary and document.summary.summary_en else '-')}</div></div>
-        <div><strong>Summary ZH:</strong><div class="pre">{escape(document.summary.summary_zh if document.summary and document.summary.summary_zh else '-')}</div></div>
+        <div><strong>Title:</strong> {escape(str(document['title']))}</div>
+        <div><strong>Source:</strong> {escape(str(document['source_name']))}</div>
+        <div><strong>URL:</strong> {url_html}</div>
+        <div><strong>Status:</strong> {escape(str(document['status']))}</div>
+        <div><strong>Language:</strong> {escape(str(document['language']))}</div>
+        <div><strong>Published:</strong> {escape(str(document['published_at']))}</div>
+        <div><strong>Summary EN:</strong><div class="pre">{escape(str(document['summary_en'] or '-'))}</div></div>
+        <div><strong>Summary ZH:</strong><div class="pre">{escape(str(document['summary_zh'] or '-'))}</div></div>
         <div><strong>Key Points:</strong><div class="pre">{key_points or '-'}</div></div>
       </section>
       <section class="card stack">
-        <div><strong>Entities</strong><div class="chips">{entity_html}</div></div>
-        <div><strong>Topics</strong><div class="chips">{topic_html}</div></div>
-        <div><strong>Content Preview</strong><div class="pre">{escape((document.content_text or '')[:2400] or '-')}</div></div>
+        <div><strong>Entities</strong><div class="chips">{entities_block}</div></div>
+        <div><strong>Topics</strong><div class="chips">{topics_block}</div></div>
+        <div><strong>Content Preview</strong><div class="pre">{escape(str(document['content_preview'] or '-'))}</div></div>
         <div class="inline">
           <a href="/web/review">Go to Review</a>
           <a href="/web/ask">Ask from this knowledge</a>
@@ -621,7 +662,7 @@ async def document_detail(document_id: str, message: str | None = None) -> HTMLR
     </div>
     """
     if error:
-        body = f"<div class='card'><strong>Database note:</strong> {escape(error)}</div>{body}"
+        body = f"{_render_database_note(error)}{body}"
     return _layout("Document Detail", body, message=message)
 
 
@@ -639,7 +680,7 @@ async def review_page(message: str | None = None) -> HTMLResponse:
         history_html = "".join(
             f"<li>{escape(edit.field_name)} -> {escape(str(edit.new_value))} <span class='muted'>{escape(str(edit.created_at))}</span></li>"
             for edit in item.history
-        ) or "<li>No review history for this item.</li>"
+        ) or _empty_list_item("No review history available for this item.")
         current_uncertainty_status = item.effective_values.get("uncertainty_status")
         uncertainty_status_options = []
         if current_uncertainty_status is None:
@@ -685,7 +726,7 @@ uncertainty_status={escape(str(item.auto_values.get("uncertainty_status") or "")
         history_html = "".join(
             f"<li>{escape(edit.field_name)} -> {escape(str(edit.new_value))} <span class='muted'>{escape(str(edit.created_at))}</span></li>"
             for edit in item.history
-        ) or "<li>No review history for this item.</li>"
+        ) or _empty_list_item("No review history available for this item.")
         severity_options = "".join(
             f"<option value='{escape(value)}'{' selected' if item.effective_values.get('severity') == value else ''}>{escape(value)}</option>"
             for value in ("high", "medium", "low")
@@ -725,7 +766,7 @@ description={escape(str(item.auto_values.get("description") or ""))}</div>
         history_html = "".join(
             f"<li>{escape(edit.field_name)} -> {escape(str(edit.new_value))} <span class='muted'>{escape(str(edit.created_at))}</span></li>"
             for edit in item.history
-        ) or "<li>No review history for this item.</li>"
+        ) or _empty_list_item("No review history available for this item.")
         status_options = "".join(
             f"<option value='{escape(value)}'{' selected' if item.effective_values.get('status') == value else ''}>{escape(value)}</option>"
             for value in ("candidate", "confirmed", "dismissed", "watching")
@@ -795,7 +836,7 @@ total_score={escape(str(item.auto_values.get("total_score")))}
         history_html = "".join(
             f"<li>{escape(edit.field_name)} -> {escape(str(edit.new_value))} <span class='muted'>{escape(str(edit.created_at))}</span></li>"
             for edit in history[:5]
-        ) or "<li>No review history for this item.</li>"
+        ) or _empty_list_item("No review history available for this item.")
         auto_key_points_text = "\n".join(str(point) for point in item.auto_values.get("key_points") or [])
         effective_key_points_text = "\n".join(str(point) for point in item.effective_values.get("key_points") or [])
         sections.append(
@@ -830,16 +871,16 @@ key_points={escape(auto_key_points_text)}</div>
               </section>
               """
         )
-    content = "".join(uncertainty_sections + risk_sections + opportunity_sections + sections) or "<div class='card'>No reviewed summaries, opportunities, risks, or uncertainties are available.</div>"
+    content = "".join(uncertainty_sections + risk_sections + opportunity_sections + sections) or "<div class='card'>No review items available.</div>"
     notes = []
     if uncertainty_error:
-        notes.append(f"<div class='card'><strong>Database note:</strong> {escape(uncertainty_error)}</div>")
+        notes.append(_render_database_note(uncertainty_error))
     if risk_error:
-        notes.append(f"<div class='card'><strong>Database note:</strong> {escape(risk_error)}</div>")
+        notes.append(_render_database_note(risk_error))
     if opportunity_error:
-        notes.append(f"<div class='card'><strong>Database note:</strong> {escape(opportunity_error)}</div>")
+        notes.append(_render_database_note(opportunity_error))
     if error:
-        notes.append(f"<div class='card'><strong>Database note:</strong> {escape(error)}</div>")
+        notes.append(_render_database_note(error))
     if notes:
         content = "".join(notes) + content
     return _layout("Review", content, message=message)
@@ -957,7 +998,7 @@ async def ask_page(message: str | None = None) -> HTMLResponse:
         </section>
         """
         for item in history
-    ) or "<div class='card'>No Q&amp;A history yet.</div>"
+    ) or "<div class='card'>No recent Q&amp;A available.</div>"
     body = f"""
     <div class="grid cols-2">
       <section class="card">
@@ -1022,19 +1063,19 @@ async def ask_submit(request: Request) -> HTMLResponse:
         </section>
         <section class="card">
           <h2>Opportunities</h2>
-          {_render_structured_list(result.get("opportunities"), empty_message="No reviewed opportunities were extracted for this answer.")}
+          {_render_structured_list(result.get("opportunities"), empty_message="No reviewed opportunities available for this answer.")}
         </section>
         <section class="card">
           <h2>Risks</h2>
-          {_render_structured_list(result.get("risks"), empty_message="No reviewed risks were extracted for this answer.")}
+          {_render_structured_list(result.get("risks"), empty_message="No reviewed risks available for this answer.")}
         </section>
         <section class="card">
           <h2>Uncertainties</h2>
-          {_render_structured_list(result.get("uncertainties"), empty_message="No reviewed uncertainties were extracted for this answer.")}
+          {_render_structured_list(result.get("uncertainties"), empty_message="No reviewed uncertainties available for this answer.")}
         </section>
         <section class="card">
           <h2>Related Topics</h2>
-          {_render_structured_list(result.get("related_topics"), empty_message="No related topics were extracted for this answer.")}
+          {_render_structured_list(result.get("related_topics"), empty_message="No related topics available for this answer.")}
         </section>
         <section class="card">
           <h2>Meta</h2>
@@ -1159,27 +1200,34 @@ async def test_ai_provider(provider_id: str) -> RedirectResponse:
 
 @router.get("/web/system")
 async def system_page(message: str | None = None) -> HTMLResponse:
-    status = service.get_system_status()
+    status = service.get_system_page_data()
+    checks_html = "".join(
+        f"<div><strong>{escape(item['label'])}:</strong> {escape(item['status'])}</div>"
+        f"<div class='muted'>{escape(item['detail'])}</div>"
+        for item in status["checks"]
+    ) or "<div class='muted'>No system checks available.</div>"
     file_rows = "".join(
-        f"<tr><td>{escape(item['path'])}</td><td>{escape(str(item['exists']))}</td><td>{item['size_bytes']}</td></tr>"
-        for item in status["files"]
+        f"<tr><td>{escape(item['path'])}</td><td>{escape(item['exists_label'])}</td><td>{item['size_bytes']}</td></tr>"
+        for item in status["storage_files"]
     )
     count_rows = "".join(
-        f"<tr><td>{escape(name)}</td><td>{count}</td></tr>" for name, count in status["counts"].items()
+        f"<tr><td>{escape(item['name'])}</td><td>{item['count']}</td></tr>" for item in status["database_counts"]
     ) or "<tr><td colspan='2'>No database counts available.</td></tr>"
+    file_rows = file_rows or "<tr><td colspan='3'>No storage files available.</td></tr>"
+    note_html = _render_database_note(status.get("counts_error"))
     body = f"""
+    {note_html}
     <div class="grid cols-2">
       <section class="card stack">
-        <div><strong>DB env:</strong> {escape(status['database_environment'].detail)}</div>
-        <div><strong>DB connection:</strong> {escape(status['database_connection'].detail)}</div>
-        <div><strong>pgvector:</strong> {escape(status['pgvector'].detail)}</div>
+        <h2>System Checks</h2>
+        {checks_html}
       </section>
       <section class="card">
         <h2>Database Counts</h2>
         <table><tbody>{count_rows}</tbody></table>
       </section>
       <section class="card">
-        <h2>Local Web Storage</h2>
+        <h2>Storage Files</h2>
         <table>
           <thead><tr><th>Path</th><th>Exists</th><th>Size (bytes)</th></tr></thead>
           <tbody>{file_rows}</tbody>

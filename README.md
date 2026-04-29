@@ -269,11 +269,14 @@ This section supplements the older update above.
 - `what-openai-did` succeeded in observation rerun, but remains `deferred`.
 - `/web/ask` display-layer cleanup has been completed.
 - `/web/review` and `/web/ask` now share more consistent page-level wording and empty-state semantics.
+- Web MVP route-level smoke acceptance is now calibrated and repeatable.
+- The current smoke suite is explicitly route-level and service-mocked, not real browser or live DB integration.
 
 What this means in practice:
 
 - content maintenance baseline remains stable
 - Web MVP display semantics have been further unified
+- page-contract and acceptance documentation are now consolidated
 - Ask display cleanup and Review / Ask wording cleanup should not be reopened as default next tasks
 
 For the latest handoff status and the most reasonable next-session starting point, always prefer [ARCH_CONTEXT.md](./ARCH_CONTEXT.md).

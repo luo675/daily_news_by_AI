@@ -1157,3 +1157,49 @@ The next session should now start from one of these two paths:
    - treat Ask and Review display-semantics cleanup as already done
    - pick a new small page-quality task on top of the stable baseline
    - do not restart Ask display or Review wording cleanup as the default next step
+
+## 9. Latest Progress Addendum (2026-04-29 Web MVP route-level smoke acceptance)
+
+This addendum overrides older notes that still describe the Web MVP acceptance work as a broad end-to-end pass.
+
+### Completed in this round
+
+- The Web MVP acceptance layer was calibrated to be explicitly route-level and service-mocked.
+- `tests/test_web_mvp_acceptance.py` now uses narrower smoke names and checks key content blocks plus redirect targets.
+- `docs/web_mvp_acceptance_checklist.md` now states the acceptance boundary clearly:
+  - route-level
+  - service-mocked
+  - not real browser automation
+  - not real database integration
+- The page-contract set is now consolidated into `docs/web_page_contract.md`.
+
+### Updated stable understanding
+
+At the current stage, the project should now be understood as:
+
+- `content maintenance baseline stable`
+- `Web MVP baseline stable`
+- page-layer contracts are consolidated in `docs/web_page_contract.md`
+- route-level smoke acceptance is calibrated and repeatable
+- current Web smoke coverage verifies contract stability and primary flow closure, not live DB/browser integration
+
+### Important boundary that remains
+
+- Do not describe the current `web_mvp_acceptance` suite as full end-to-end browser verification.
+- Do not reopen page wording cleanup or route-level smoke calibration as default next tasks.
+- Do not treat mocked route acceptance as proof of production persistence behavior.
+
+### Updated next-session starting point
+
+The next session should no longer start from acceptance cleanup or page-contract cleanup as the default task.
+
+Use this rule instead:
+
+1. If the goal is content maintenance:
+   - continue baseline maintenance
+   - re-check formal seed baseline
+   - observe deferred candidates such as `what-openai-did`
+2. If the goal is Web/product iteration:
+   - treat page contracts and route-level smoke acceptance as already established
+   - pick the next highest-value small task on top of the stable baseline
+   - if stronger confidence is needed, use a separate real integration or browser automation layer instead of expanding this smoke suite by default

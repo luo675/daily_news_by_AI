@@ -459,10 +459,10 @@ def test_ask_submit_handles_empty_and_missing_fields_without_document_links(
     assert "Brief-only reviewed evidence." in response.text
     assert "Untitled evidence" in response.text
     assert "/web/documents/" not in response.text
-    assert "No reviewed opportunities were extracted for this answer." in response.text
-    assert "No reviewed risks were extracted for this answer." in response.text
-    assert "No reviewed uncertainties were extracted for this answer." in response.text
-    assert "No related topics were extracted for this answer." in response.text
+    assert "No reviewed opportunities available for this answer." in response.text
+    assert "No reviewed risks available for this answer." in response.text
+    assert "No reviewed uncertainties available for this answer." in response.text
+    assert "No related topics available for this answer." in response.text
     assert "No metadata available." in response.text
 
 
@@ -491,11 +491,11 @@ def test_ask_submit_renders_with_minimal_required_contract_fields(
     assert "Status: local answer" in response.text
     assert "Mode: local_only" in response.text
     assert "Provider: default/local only" in response.text
-    assert "No local evidence was attached to this answer." in response.text
-    assert "No reviewed opportunities were extracted for this answer." in response.text
-    assert "No reviewed risks were extracted for this answer." in response.text
-    assert "No reviewed uncertainties were extracted for this answer." in response.text
-    assert "No related topics were extracted for this answer." in response.text
+    assert "No evidence available for this answer." in response.text
+    assert "No reviewed opportunities available for this answer." in response.text
+    assert "No reviewed risks available for this answer." in response.text
+    assert "No reviewed uncertainties available for this answer." in response.text
+    assert "No related topics available for this answer." in response.text
     assert "No metadata available." in response.text
     assert "Error State" not in response.text
 
@@ -1217,6 +1217,18 @@ def test_ask_page_reads_history_from_db(monkeypatch, workspace_tmp_path: Path) -
     assert "What changed in AI coding tools this week?" in response.text
     assert "Stored DB answer." in response.text
     assert "Stored DB note." in response.text
+
+
+def test_ask_page_renders_shared_empty_history_language(monkeypatch, workspace_tmp_path: Path) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    monkeypatch.setattr(web_routes.service, "list_ai_providers", lambda: [])
+    monkeypatch.setattr(web_routes.service, "list_qa_history", lambda: [])
+
+    client = TestClient(create_app())
+    response = client.get("/web/ask")
+
+    assert response.status_code == 200
+    assert "No recent Q&amp;A available." in response.text
 
 
 def test_ai_provider_edit_page_hides_plaintext_key(monkeypatch, workspace_tmp_path: Path) -> None:
