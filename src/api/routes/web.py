@@ -66,6 +66,18 @@ def _render_definition_rows(rows: list[tuple[str, object]]) -> str:
     return "".join(parts)
 
 
+def _render_text_rows(rows: list[tuple[str, object]]) -> str:
+    parts: list[str] = []
+    for label, value in rows:
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        rendered_value = _render_value(value)
+        parts.append(f"<div>{escape(label)}: {escape(rendered_value)}</div>")
+    return "".join(parts)
+
+
 def _render_structured_list(items: object, *, empty_message: str) -> str:
     values = _coerce_items(items)
     if not values:
@@ -103,12 +115,50 @@ def _render_meta_section(meta: object) -> str:
     return _render_definition_rows([(str(key), value) for key, value in meta.items()])
 
 
+def _format_ask_provider_name(value: object) -> str:
+    text = str(value or "").strip()
+    return text or "default/local only"
+
+
+def _format_count_label(count: int, singular: str, plural: str | None = None) -> str:
+    word = singular if count == 1 else (plural or f"{singular}s")
+    return f"{count} {word}"
+
+
+def _build_ask_metadata_rows(result: dict[str, object], *, include_status: bool) -> list[tuple[str, object]]:
+    status_label, _ = _build_ask_status(result)
+    evidence_items = _coerce_items(result.get("evidence"))
+    first_match_basis = ""
+    for item in evidence_items:
+        if isinstance(item, dict) and str(item.get("match_basis") or "").strip():
+            first_match_basis = str(item.get("match_basis")).strip()
+            break
+
+    rows: list[tuple[str, object]] = []
+    if include_status:
+        rows.append(("Status", status_label))
+    rows.extend(
+        [
+            ("Mode", str(result.get("answer_mode") or "local_only")),
+            ("Provider", _format_ask_provider_name(result.get("provider_name"))),
+            ("Created", str(result.get("created_at") or "").strip() or "-"),
+            ("Evidence", _format_count_label(len(evidence_items), "item")),
+        ]
+    )
+    if first_match_basis:
+        rows.append(("Match", first_match_basis))
+    note = str(result.get("note") or "").strip()
+    if note:
+        rows.append(("Note", note))
+    return rows
+
+
 def _build_ask_status(result: dict[str, object]) -> tuple[str, str]:
     answer_mode = str(result.get("answer_mode") or "local_only")
     if answer_mode == "insufficient_local_evidence":
         return "incomplete", "Local evidence was not sufficient for a reliable answer."
     if answer_mode == "local_fallback":
-        return "fallback warning", "External provider failed, so the page is showing the local answer."
+        return "fallback warning", "Showing local answer because the external provider failed."
     if answer_mode == "local_with_external_reasoning":
         return "bounded external reasoning", "External reasoning stayed constrained to retrieved local evidence."
     return "local answer", "Answer rendered from local evidence only."
@@ -117,7 +167,7 @@ def _build_ask_status(result: dict[str, object]) -> tuple[str, str]:
 def _render_ask_evidence(items: object) -> str:
     evidence_items = _coerce_items(items)
     if not evidence_items:
-        return "<div class='muted'>No local evidence was available for this result.</div>"
+        return "<div class='muted'>No local evidence was attached to this answer.</div>"
     cards: list[str] = []
     for raw_item in evidence_items:
         item = raw_item if isinstance(raw_item, dict) else {"title": str(raw_item)}
@@ -130,14 +180,14 @@ def _render_ask_evidence(items: object) -> str:
             title_html = f"<a href='/web/documents/{escape(str(item['document_id']))}'>{escape(title)}</a>"
         else:
             title_html = escape(title)
-        meta_rows = [f"source={source_type}"]
+        meta_rows = [("Source", source_type)]
         if match_basis:
-            meta_rows.append(f"match_basis={match_basis}")
+            meta_rows.append(("Match", match_basis))
         cards.append(
             f"""
             <article class="ask-evidence-card">
               <h3>{title_html}</h3>
-              <div class="muted">{''.join(f"<div>{escape(row)}</div>" for row in meta_rows)}</div>
+              <div class="muted">{_render_text_rows(meta_rows)}</div>
               <div class="pre">{escape(snippet)}</div>
             </article>
             """
@@ -589,7 +639,7 @@ async def review_page(message: str | None = None) -> HTMLResponse:
         history_html = "".join(
             f"<li>{escape(edit.field_name)} -> {escape(str(edit.new_value))} <span class='muted'>{escape(str(edit.created_at))}</span></li>"
             for edit in item.history
-        ) or "<li>No review history.</li>"
+        ) or "<li>No review history for this item.</li>"
         current_uncertainty_status = item.effective_values.get("uncertainty_status")
         uncertainty_status_options = []
         if current_uncertainty_status is None:
@@ -608,34 +658,34 @@ async def review_page(message: str | None = None) -> HTMLResponse:
               <div><strong>{escape(item.uncertainty_item)}</strong></div>
               <div class="muted">Brief id: {item.brief.id}</div>
               <div class="muted">Uncertainty item id: {escape(item.item_id)}</div>
-              <div class="grid cols-2" style="margin-top:12px;">
-                <div>
-                  <h3>Automatic Result</h3>
-                  <div class="pre">uncertainty_note={escape(str(item.auto_values.get("uncertainty_note") or ""))}
+                <div class="grid cols-2" style="margin-top:12px;">
+                  <div>
+                    <h3>Automatic Result</h3>
+                    <div class="pre">uncertainty_note={escape(str(item.auto_values.get("uncertainty_note") or ""))}
 uncertainty_status={escape(str(item.auto_values.get("uncertainty_status") or ""))}</div>
+                  </div>
+                  <div>
+                    <h3>Effective Values</h3>
+                    <form method="post" action="/web/review/uncertainties/{item.brief.id}/{item.route_id}">
+                      <textarea name="uncertainty_note" placeholder="uncertainty_note">{escape(str(item.effective_values.get("uncertainty_note") or ""))}</textarea>
+                      <label><input type="checkbox" name="reset_uncertainty_note"> reset to auto</label>
+                      <select name="uncertainty_status">{"".join(uncertainty_status_options)}</select>
+                      <label><input type="checkbox" name="reset_uncertainty_status"> reset to auto</label>
+                      <input name="reason" placeholder="Why are you editing this uncertainty?">
+                      <button>Save Uncertainty Review</button>
+                    </form>
+                  </div>
                 </div>
-                <div>
-                  <h3>Manual Effective Values</h3>
-                  <form method="post" action="/web/review/uncertainties/{item.brief.id}/{item.route_id}">
-                    <textarea name="uncertainty_note" placeholder="uncertainty_note">{escape(str(item.effective_values.get("uncertainty_note") or ""))}</textarea>
-                    <label><input type="checkbox" name="reset_uncertainty_note"> reset to auto</label>
-                    <select name="uncertainty_status">{"".join(uncertainty_status_options)}</select>
-                    <label><input type="checkbox" name="reset_uncertainty_status"> reset to auto</label>
-                    <input name="reason" placeholder="Why are you editing this uncertainty?">
-                    <button>Save Uncertainty Review</button>
-                  </form>
-                </div>
-              </div>
-              <h3>Recent Review Edits</h3>
-              <ul>{history_html}</ul>
-            </section>
-            """
+                <h3>Review History</h3>
+                <ul>{history_html}</ul>
+              </section>
+              """
         )
     for item in risks:
         history_html = "".join(
             f"<li>{escape(edit.field_name)} -> {escape(str(edit.new_value))} <span class='muted'>{escape(str(edit.created_at))}</span></li>"
             for edit in item.history
-        ) or "<li>No review history.</li>"
+        ) or "<li>No review history for this item.</li>"
         severity_options = "".join(
             f"<option value='{escape(value)}'{' selected' if item.effective_values.get('severity') == value else ''}>{escape(value)}</option>"
             for value in ("high", "medium", "low")
@@ -647,35 +697,35 @@ uncertainty_status={escape(str(item.auto_values.get("uncertainty_status") or "")
               <div><strong>{escape(str(item.risk_item.get("title") or "Untitled risk"))}</strong></div>
               <div class="muted">Brief id: {item.brief.id}</div>
               <div class="muted">Risk item id: {escape(item.item_id)}</div>
-              <div class="grid cols-2" style="margin-top:12px;">
-                <div>
-                  <h3>Automatic Result</h3>
-                  <div class="pre">severity={escape(str(item.auto_values.get("severity") or ""))}
+                <div class="grid cols-2" style="margin-top:12px;">
+                  <div>
+                    <h3>Automatic Result</h3>
+                    <div class="pre">severity={escape(str(item.auto_values.get("severity") or ""))}
 description={escape(str(item.auto_values.get("description") or ""))}</div>
+                  </div>
+                  <div>
+                    <h3>Effective Values</h3>
+                    <form method="post" action="/web/review/risks/{item.brief.id}/{item.route_id}">
+                      <select name="severity">{severity_options}</select>
+                      <label><input type="checkbox" name="reset_severity"> reset to auto</label>
+                      <textarea name="description" placeholder="description">{escape(str(item.effective_values.get("description") or ""))}</textarea>
+                      <label><input type="checkbox" name="reset_description"> reset to auto</label>
+                      <input name="reason" placeholder="Why are you editing this risk?">
+                      <button>Save Risk Review</button>
+                    </form>
+                  </div>
                 </div>
-                <div>
-                  <h3>Manual Effective Values</h3>
-                  <form method="post" action="/web/review/risks/{item.brief.id}/{item.route_id}">
-                    <select name="severity">{severity_options}</select>
-                    <label><input type="checkbox" name="reset_severity"> reset to auto</label>
-                    <textarea name="description" placeholder="description">{escape(str(item.effective_values.get("description") or ""))}</textarea>
-                    <label><input type="checkbox" name="reset_description"> reset to auto</label>
-                    <input name="reason" placeholder="Why are you editing this risk?">
-                    <button>Save Risk Review</button>
-                  </form>
-                </div>
-              </div>
-              <h3>Recent Review Edits</h3>
-              <ul>{history_html}</ul>
-            </section>
-            """
+                <h3>Review History</h3>
+                <ul>{history_html}</ul>
+              </section>
+              """
         )
     for item in opportunities:
         opportunity = item.opportunity
         history_html = "".join(
             f"<li>{escape(edit.field_name)} -> {escape(str(edit.new_value))} <span class='muted'>{escape(str(edit.created_at))}</span></li>"
             for edit in item.history
-        ) or "<li>No review history.</li>"
+        ) or "<li>No review history for this item.</li>"
         status_options = "".join(
             f"<option value='{escape(value)}'{' selected' if item.effective_values.get('status') == value else ''}>{escape(value)}</option>"
             for value in ("candidate", "confirmed", "dismissed", "watching")
@@ -694,22 +744,22 @@ description={escape(str(item.auto_values.get("description") or ""))}</div>
               <div><strong>{escape(opportunity.title_en or opportunity.title_zh or "Untitled opportunity")}</strong></div>
               <div class="muted">Opportunity target id: {opportunity.id}</div>
               <div class="muted">Source document: {escape(item.source_document_title or '-')}</div>
-              <div class="grid cols-2" style="margin-top:12px;">
-                <div>
-                  <h3>Automatic Result</h3>
+                <div class="grid cols-2" style="margin-top:12px;">
+                  <div>
+                    <h3>Automatic Result</h3>
                   <div class="pre">need_realness={escape(str(item.auto_values.get("need_realness")))}
 market_gap={escape(str(item.auto_values.get("market_gap")))}
 feasibility={escape(str(item.auto_values.get("feasibility")))}
 priority_score={escape(str(item.auto_values.get("priority_score")))}
 evidence_score={escape(str(item.auto_values.get("evidence_score")))}
 total_score={escape(str(item.auto_values.get("total_score")))}
-uncertainty={escape(str(item.auto_values.get("uncertainty")))}
-uncertainty_reason={escape(str(item.auto_values.get("uncertainty_reason") or ""))}
-status={escape(str(item.auto_values.get("status") or ""))}</div>
-                </div>
-                <div>
-                  <h3>Manual Effective Values</h3>
-                  <form method="post" action="/web/review/opportunities/{opportunity.id}">
+  uncertainty={escape(str(item.auto_values.get("uncertainty")))}
+  uncertainty_reason={escape(str(item.auto_values.get("uncertainty_reason") or ""))}
+  status={escape(str(item.auto_values.get("status") or ""))}</div>
+                  </div>
+                  <div>
+                    <h3>Effective Values</h3>
+                    <form method="post" action="/web/review/opportunities/{opportunity.id}">
                     <input name="need_realness" type="number" min="1" max="10" value="{escape(str(item.effective_values.get("need_realness") or ""))}" placeholder="need_realness">
                     <label><input type="checkbox" name="reset_need_realness"> reset to auto</label>
                     <input name="market_gap" type="number" min="1" max="10" value="{escape(str(item.effective_values.get("market_gap") or ""))}" placeholder="market_gap">
@@ -728,15 +778,15 @@ status={escape(str(item.auto_values.get("status") or ""))}</div>
                     <label><input type="checkbox" name="reset_uncertainty_reason"> reset to auto</label>
                     <select name="status">{status_options}</select>
                     <label><input type="checkbox" name="reset_status"> reset to auto</label>
-                    <input name="reason" placeholder="Why are you editing this opportunity?">
-                    <button>Save Opportunity Review</button>
-                  </form>
+                      <input name="reason" placeholder="Why are you editing this opportunity?">
+                      <button>Save Opportunity Review</button>
+                    </form>
+                  </div>
                 </div>
-              </div>
-              <h3>Recent Review Edits</h3>
-              <ul>{history_html}</ul>
-            </section>
-            """
+                <h3>Review History</h3>
+                <ul>{history_html}</ul>
+              </section>
+              """
         )
     for item in documents:
         document = item.document
@@ -745,7 +795,7 @@ status={escape(str(item.auto_values.get("status") or ""))}</div>
         history_html = "".join(
             f"<li>{escape(edit.field_name)} -> {escape(str(edit.new_value))} <span class='muted'>{escape(str(edit.created_at))}</span></li>"
             for edit in history[:5]
-        ) or "<li>No review history.</li>"
+        ) or "<li>No review history for this item.</li>"
         auto_key_points_text = "\n".join(str(point) for point in item.auto_values.get("key_points") or [])
         effective_key_points_text = "\n".join(str(point) for point in item.effective_values.get("key_points") or [])
         sections.append(
@@ -754,33 +804,33 @@ status={escape(str(item.auto_values.get("status") or ""))}</div>
               <h2>Summary Review</h2>
               <div><strong>{escape(document.title)}</strong></div>
               <div class="muted">Summary target id: {summary.id}</div>
-              <div class="grid cols-2" style="margin-top:12px;">
-                <div>
-                  <h3>Automatic Result</h3>
-                  <div class="pre">summary_zh={escape(str(item.auto_values.get("summary_zh") or ""))}
+                <div class="grid cols-2" style="margin-top:12px;">
+                  <div>
+                    <h3>Automatic Result</h3>
+                    <div class="pre">summary_zh={escape(str(item.auto_values.get("summary_zh") or ""))}
 summary_en={escape(str(item.auto_values.get("summary_en") or ""))}
 key_points={escape(auto_key_points_text)}</div>
-                </div>
-                <div>
-                  <h3>Manual Effective Values</h3>
-                  <form method="post" action="/web/review/{summary.id}">
+                  </div>
+                  <div>
+                    <h3>Effective Values</h3>
+                    <form method="post" action="/web/review/{summary.id}">
                     <textarea name="summary_zh" placeholder="summary_zh">{escape(str(item.effective_values.get("summary_zh") or ""))}</textarea>
                     <label><input type="checkbox" name="reset_summary_zh"> reset to auto</label>
                     <textarea name="summary_en" placeholder="summary_en">{escape(str(item.effective_values.get("summary_en") or ""))}</textarea>
                     <label><input type="checkbox" name="reset_summary_en"> reset to auto</label>
                     <textarea name="key_points" placeholder="One key point per line">{escape(effective_key_points_text)}</textarea>
                     <label><input type="checkbox" name="reset_key_points"> reset to auto</label>
-                    <input name="reason" placeholder="Why are you editing this summary?">
-                    <button>Save Review</button>
-                  </form>
+                      <input name="reason" placeholder="Why are you editing this summary?">
+                      <button>Save Review</button>
+                    </form>
+                  </div>
                 </div>
-              </div>
-              <h3>Recent Review Edits</h3>
-              <ul>{history_html}</ul>
-            </section>
-            """
+                <h3>Review History</h3>
+                <ul>{history_html}</ul>
+              </section>
+              """
         )
-    content = "".join(uncertainty_sections + risk_sections + opportunity_sections + sections) or "<div class='card'>No reviewable summaries, opportunities, risks, or uncertainties found.</div>"
+    content = "".join(uncertainty_sections + risk_sections + opportunity_sections + sections) or "<div class='card'>No reviewed summaries, opportunities, risks, or uncertainties are available.</div>"
     notes = []
     if uncertainty_error:
         notes.append(f"<div class='card'><strong>Database note:</strong> {escape(uncertainty_error)}</div>")
@@ -902,13 +952,12 @@ async def ask_page(message: str | None = None) -> HTMLResponse:
         f"""
         <section class='card'>
           <h2>{escape(item['question'])}</h2>
-          <div class='muted'>mode={escape(item['answer_mode'])} provider={escape(str(item.get('provider_name') or '-'))} created_at={escape(str(item.get('created_at') or '-'))}</div>
-          {f"<div class='muted'>{escape(str(item.get('note') or ''))}</div>" if str(item.get('note') or '').strip() else ""}
+          <div class='stack muted'>{_render_text_rows(_build_ask_metadata_rows(item, include_status=True))}</div>
           <div class='pre'>{escape(_truncate_text(item['answer'], limit=220))}</div>
         </section>
         """
         for item in history
-    ) or "<div class='card'>No Q&A history yet.</div>"
+    ) or "<div class='card'>No Q&amp;A history yet.</div>"
     body = f"""
     <div class="grid cols-2">
       <section class="card">
@@ -936,18 +985,7 @@ async def ask_submit(request: Request) -> HTMLResponse:
         status_class = "ask-status warning"
     elif status_label == "incomplete":
         status_class = "ask-status incomplete"
-    run_metadata_lines = [
-        f"mode={result.get('answer_mode') or 'local_only'}",
-        f"provider={result.get('provider_name') or '-'}",
-    ]
-    if str(result.get("note") or "").strip():
-        run_metadata_lines.append(f"note={result.get('note')}")
-    if str(result.get("created_at") or "").strip():
-        run_metadata_lines.append(f"created_at={result.get('created_at')}")
-    run_metadata_html = "".join(
-        f"<div>{escape(str(line))}</div>"
-        for line in run_metadata_lines
-    ) or "<div class='muted'>No run metadata available.</div>"
+    run_metadata_html = _render_text_rows(_build_ask_metadata_rows(result, include_status=True))
     error_html = ""
     if str(result.get("error") or "").strip():
         error_html = f"""
@@ -960,7 +998,7 @@ async def ask_submit(request: Request) -> HTMLResponse:
     <div class="grid cols-2">
       <section class="card">
         <div class="{status_class}" style="margin-bottom:14px;">
-          <strong>{escape(status_label)}</strong>
+          <strong>Status: {escape(status_label)}</strong>
           <div class="muted">{escape(status_message)}</div>
         </div>
         <section class="ask-section">
@@ -972,7 +1010,7 @@ async def ask_submit(request: Request) -> HTMLResponse:
           <div class="pre">{escape(result['answer'])}</div>
         </section>
         <section class="ask-section">
-          <h2>Run Metadata</h2>
+          <h2>Run Details</h2>
           <div class="stack">{run_metadata_html}</div>
         </section>
         {error_html}
@@ -984,19 +1022,19 @@ async def ask_submit(request: Request) -> HTMLResponse:
         </section>
         <section class="card">
           <h2>Opportunities</h2>
-          {_render_structured_list(result.get("opportunities"), empty_message="No opportunities extracted.")}
+          {_render_structured_list(result.get("opportunities"), empty_message="No reviewed opportunities were extracted for this answer.")}
         </section>
         <section class="card">
           <h2>Risks</h2>
-          {_render_structured_list(result.get("risks"), empty_message="No risks extracted.")}
+          {_render_structured_list(result.get("risks"), empty_message="No reviewed risks were extracted for this answer.")}
         </section>
         <section class="card">
           <h2>Uncertainties</h2>
-          {_render_structured_list(result.get("uncertainties"), empty_message="No uncertainties extracted.")}
+          {_render_structured_list(result.get("uncertainties"), empty_message="No reviewed uncertainties were extracted for this answer.")}
         </section>
         <section class="card">
           <h2>Related Topics</h2>
-          {_render_structured_list(result.get("related_topics"), empty_message="No related topics extracted.")}
+          {_render_structured_list(result.get("related_topics"), empty_message="No related topics were extracted for this answer.")}
         </section>
         <section class="card">
           <h2>Meta</h2>

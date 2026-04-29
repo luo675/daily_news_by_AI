@@ -1,21 +1,29 @@
 # Seed Maintenance Note
 
-Date: 2026-04-21
+Date: 2026-04-29
 
 This note records seed-maintenance observations only. It does not change code, CLI behavior, or ingestion capability.
 
 Recent maintenance updates:
 
-- `https://openai.com/index/hello-gpt-4o/` is no longer classified as a known failure.
-- The URL was removed from `known_failures.txt` after a successful run in a network-enabled environment.
-- The URL is not promoted to a formal seed yet. Promotion is deferred until a later maintenance trial confirms it is stable enough to track.
+- Formal baseline rerun was attempted first, as required.
+- In the sandbox-restricted environment, every baseline URL failed with `URLError: [WinError 10013]`.
+- The failure pattern was uniform across Simon Willison and Anthropic URLs, so this cycle treats that first pass as an environment/network restriction, not as a source-specific or pipeline-specific regression.
+- The same baseline URLs were rerun in a network-enabled environment and succeeded 4/4.
 
 Minimal expansion trial:
 
 - Trial candidate: `https://www.oneusefulthing.org/p/what-openai-did`
-- Trial mode: reuse the existing `run_application_batch.py --url-list ... --no-persist` workflow with the current four baseline URLs plus this one candidate.
-- Trial result: workflow passed in a network-enabled environment with 5/5 items succeeded.
-- Observation: the candidate is operationally compatible with the current thin HTML importer and application pipeline.
-- Observation: structured output was usable for trial review, including opportunities, risks, open questions, and related topic signals.
-- Observation: extraction quality is not fully clean yet; at least one noisy entity (`But`) appeared in the candidate result, so this trial should not be treated as an automatic promotion signal.
+- Trial mode: single-URL observation rerun with the existing `run_application_batch.py --url ... --no-persist` workflow after the formal baseline was confirmed stable.
+- Trial result: workflow passed in a network-enabled environment with 1/1 item succeeded.
+- Observation: the candidate remains operationally compatible with the current thin HTML importer and application pipeline.
+- Observation: this cycle records operational success only. It does not promote the URL and does not change deferred-candidate status.
 - Decision: keep the candidate deferred for now and only reconsider promotion after another explicit maintenance decision.
+
+This cycle's URL-by-URL record:
+
+- `https://simonwillison.net/2024/May/29/training-not-chatting/`: sandbox-restricted run failed with `URLError [WinError 10013]`; network-enabled rerun succeeded.
+- `https://simonwillison.net/2024/Dec/31/llms-in-2024/`: sandbox-restricted run failed with `URLError [WinError 10013]`; network-enabled rerun succeeded.
+- `https://www.anthropic.com/news/claude-3-5-sonnet`: sandbox-restricted run failed with `URLError [WinError 10013]`; network-enabled rerun succeeded.
+- `https://www.anthropic.com/news/announcing-our-updated-responsible-scaling-policy`: sandbox-restricted run failed with `URLError [WinError 10013]`; network-enabled rerun succeeded.
+- `https://www.oneusefulthing.org/p/what-openai-did`: single-URL observation rerun succeeded in the network-enabled environment.

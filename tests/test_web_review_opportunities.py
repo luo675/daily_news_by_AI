@@ -703,7 +703,9 @@ def test_review_page_renders_summary_review_card(monkeypatch, workspace_tmp_path
     assert "Summary Review" in response.text
     assert "Reviewed summary document" in response.text
     assert "Automatic Result" in response.text
-    assert "Manual Effective Values" in response.text
+    assert "Effective Values" in response.text
+    assert "Manual Effective Values" not in response.text
+    assert "Review History" in response.text
     assert "name=\"reset_summary_zh\"" in response.text
     assert "name=\"reset_summary_en\"" in response.text
     assert "name=\"reset_key_points\"" in response.text
@@ -992,6 +994,8 @@ def test_review_page_renders_risk_review_card(monkeypatch, workspace_tmp_path: P
 
     assert response.status_code == 200
     assert "Risk Review" in response.text
+    assert "Effective Values" in response.text
+    assert "Review History" in response.text
     assert "Model provider concentration" in response.text
     assert "name=\"reset_severity\"" in response.text
     assert "name=\"reset_description\"" in response.text
@@ -1432,12 +1436,31 @@ def test_review_page_renders_uncertainty_review_card(monkeypatch, workspace_tmp_
 
     assert response.status_code == 200
     assert "Uncertainty Review" in response.text
+    assert "Effective Values" in response.text
+    assert "Review History" in response.text
     assert "Provider lock-in remains unclear." in response.text
     assert '<option value="__UNCHANGED__" selected>-- keep auto / no manual override --</option>' in response.text
     assert '<option value="open" selected>' not in response.text
     assert "name=\"reset_uncertainty_note\"" in response.text
     assert "name=\"reset_uncertainty_status\"" in response.text
     assert f"action=\"/web/review/uncertainties/{brief.id}/{target_id}\"" in response.text
+
+
+def test_review_page_renders_empty_state_with_shared_review_language(
+    monkeypatch,
+    workspace_tmp_path: Path,
+) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    monkeypatch.setattr(web_routes.service, "list_review_uncertainties", lambda: ([], None))
+    monkeypatch.setattr(web_routes.service, "list_review_risks", lambda: ([], None))
+    monkeypatch.setattr(web_routes.service, "list_review_opportunities", lambda: ([], None))
+    monkeypatch.setattr(web_routes.service, "list_review_documents", lambda: ([], None))
+
+    client = TestClient(create_app())
+    response = client.get("/web/review")
+
+    assert response.status_code == 200
+    assert "No reviewed summaries, opportunities, risks, or uncertainties are available." in response.text
 
 
 def test_review_page_submit_uncertainty_includes_reset_flags(monkeypatch, workspace_tmp_path: Path) -> None:

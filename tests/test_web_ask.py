@@ -285,6 +285,13 @@ def test_ask_page_renders_history_and_local_evidence_note(monkeypatch, workspace
                 "provider_name": None,
                 "note": "Multiple local evidence items matched the question.",
                 "answer": "Local answer body",
+                "created_at": "2026-04-28T09:30:00+00:00",
+                "evidence": [
+                    {
+                        "title": "Weekly AI coding tools update",
+                        "match_basis": "summary",
+                    }
+                ],
             }
         ],
     )
@@ -296,6 +303,11 @@ def test_ask_page_renders_history_and_local_evidence_note(monkeypatch, workspace
     assert "Ask from Local Knowledge" in response.text
     assert "may only reason over the retrieved local evidence" in response.text
     assert "Multiple local evidence items matched the question." in response.text
+    assert "Status: local answer" in response.text
+    assert "Provider: default/local only" in response.text
+    assert "Created: 2026-04-28T09:30:00+00:00" in response.text
+    assert "Evidence: 1 item" in response.text
+    assert "Match: summary" in response.text
 
 
 def test_ask_submit_renders_answer_mode_and_note(monkeypatch, workspace_tmp_path: Path) -> None:
@@ -310,6 +322,7 @@ def test_ask_submit_renders_answer_mode_and_note(monkeypatch, workspace_tmp_path
             "provider_name": "Local QA Provider",
             "note": "A focused local summary/key-point match was found.",
             "error": None,
+            "created_at": "2026-04-28T10:00:00+00:00",
             "evidence": [
                 {
                     "document_id": str(uuid.uuid4()),
@@ -329,7 +342,11 @@ def test_ask_submit_renders_answer_mode_and_note(monkeypatch, workspace_tmp_path
     )
 
     assert response.status_code == 200
-    assert "mode=local_with_external_reasoning" in response.text
+    assert "Status: bounded external reasoning" in response.text
+    assert "Mode: local_with_external_reasoning" in response.text
+    assert "Provider: Local QA Provider" in response.text
+    assert "Created: 2026-04-28T10:00:00+00:00" in response.text
+    assert "Evidence: 1 item" in response.text
     assert "A focused local summary/key-point match was found." in response.text
     assert "Bounded answer from local evidence." in response.text
 
@@ -379,14 +396,18 @@ def test_ask_submit_renders_structured_result_sections_and_status(monkeypatch, w
     )
 
     assert response.status_code == 200
-    assert "fallback warning" in response.text
-    assert "Run Metadata" in response.text
-    assert "created_at=2026-04-28T01:02:03+00:00" in response.text
+    assert "Status: fallback warning" in response.text
+    assert "Showing local answer because the external provider failed." in response.text
+    assert "Run Details" in response.text
+    assert "Mode: local_fallback" in response.text
+    assert "Provider: Local QA Provider" in response.text
+    assert "Created: 2026-04-28T01:02:03+00:00" in response.text
+    assert "Evidence: 2 items" in response.text
     assert "Evidence" in response.text
-    assert "source=document" in response.text
-    assert "source=brief" in response.text
-    assert "match_basis=key_point" in response.text
-    assert "match_basis=summary" in response.text
+    assert "Source: document" in response.text
+    assert "Source: brief" in response.text
+    assert "Match: key_point" in response.text
+    assert "Match: summary" in response.text
     assert "Opportunities" in response.text
     assert "Risks" in response.text
     assert "Uncertainties" in response.text
@@ -434,14 +455,14 @@ def test_ask_submit_handles_empty_and_missing_fields_without_document_links(
     )
 
     assert response.status_code == 200
-    assert "incomplete" in response.text
+    assert "Status: incomplete" in response.text
     assert "Brief-only reviewed evidence." in response.text
     assert "Untitled evidence" in response.text
     assert "/web/documents/" not in response.text
-    assert "No opportunities extracted." in response.text
-    assert "No risks extracted." in response.text
-    assert "No uncertainties extracted." in response.text
-    assert "No related topics extracted." in response.text
+    assert "No reviewed opportunities were extracted for this answer." in response.text
+    assert "No reviewed risks were extracted for this answer." in response.text
+    assert "No reviewed uncertainties were extracted for this answer." in response.text
+    assert "No related topics were extracted for this answer." in response.text
     assert "No metadata available." in response.text
 
 
@@ -467,14 +488,14 @@ def test_ask_submit_renders_with_minimal_required_contract_fields(
 
     assert response.status_code == 200
     assert "Minimal answer body." in response.text
-    assert "local answer" in response.text
-    assert "mode=local_only" in response.text
-    assert "provider=-" in response.text
-    assert "No local evidence was available for this result." in response.text
-    assert "No opportunities extracted." in response.text
-    assert "No risks extracted." in response.text
-    assert "No uncertainties extracted." in response.text
-    assert "No related topics extracted." in response.text
+    assert "Status: local answer" in response.text
+    assert "Mode: local_only" in response.text
+    assert "Provider: default/local only" in response.text
+    assert "No local evidence was attached to this answer." in response.text
+    assert "No reviewed opportunities were extracted for this answer." in response.text
+    assert "No reviewed risks were extracted for this answer." in response.text
+    assert "No reviewed uncertainties were extracted for this answer." in response.text
+    assert "No related topics were extracted for this answer." in response.text
     assert "No metadata available." in response.text
     assert "Error State" not in response.text
 

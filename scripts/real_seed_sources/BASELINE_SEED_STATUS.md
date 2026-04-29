@@ -1,6 +1,6 @@
 # Baseline Seed Status
 
-Date: 2026-04-21
+Date: 2026-04-29
 
 This note records the current baseline seed set for the next maintenance cycle. It is a seed-maintenance update only, not a code change.
 
@@ -18,10 +18,22 @@ Deferred candidates that remain deferred:
 
 Maintenance status:
 
-- The latest maintenance rerun on 2026-04-21 passed through the existing workflow.
+- The latest maintenance rerun on 2026-04-29 first failed in the sandbox-restricted environment with `URLError: [WinError 10013]`, which is consistent with a local network permission restriction rather than an application regression.
+- The formal seed baseline was then rerun in a network-enabled environment with the existing `run_application_batch.py --url-list ... --no-persist` workflow.
 - The current formal seed baseline reran successfully with 4/4 items succeeded.
-- No code regression was observed in the latest maintenance rerun.
-- No new implementation work is needed at this stage.
+
+Formal seed baseline result details:
+
+- `https://simonwillison.net/2024/May/29/training-not-chatting/`: success
+- `https://simonwillison.net/2024/Dec/31/llms-in-2024/`: success
+- `https://www.anthropic.com/news/claude-3-5-sonnet`: success
+- `https://www.anthropic.com/news/announcing-our-updated-responsible-scaling-policy`: success
+
+Conclusion:
+
+- Baseline success rate for the network-enabled rerun: 4/4 (100%).
+- No source-specific failure reproduced in the formal baseline set during this cycle.
+- No code change is indicated from this maintenance pass.
 
 Recommendation for the next cycle:
 

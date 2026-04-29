@@ -893,22 +893,24 @@ See:
 
 下个会话不应再从“搭工作流”起手，也不应直接写代码；当前最合理的起点有两条，取决于会话目标：
 
-- 如果继续沿当前内容维护主线推进：基于最新试跑与评审结论，准备下一轮 observation-oriented maintenance
-- 如果继续沿当前网页产品主线推进：不要再回到信息架构空谈；Review 的最小结构化审核能力、Ask reviewed evidence 优先消费、Ask history DB-first 收口、AI provider config DB-first 收口都已落地。当前最合理的下一步应是基于 `docs/ask_result_display_optimization.md` 推进 Ask 结果展示优化，而不是继续做新的周边存储迁移。
+- 如果继续沿当前内容维护主线推进：基于 2026-04-29 的 latest maintenance 结论，准备下一轮 observation-oriented maintenance
+- 如果继续沿当前网页产品主线推进：不要再回到信息架构空谈；Review 的最小结构化审核能力、Ask reviewed evidence 优先消费、Ask history DB-first 收口、AI provider config DB-first 收口、Ask 最小展示收口、Review / Ask 共享展示术语统一都已落地。当前最合理的下一步应是新的小型页面质量任务，而不是继续做 Ask 展示收口或新的周边存储迁移。
 
 推荐起手顺序：
 1. 先确认当前是走“内容维护主线”还是“网页版 MVP 规划主线”
 2. 如果走内容维护主线：
    - 确认当前 formal seed baseline 与 deferred 列表
-   - 明确 `what-openai-did` 当前状态是 `eligible for future promotion after another cycle`
+   - 明确 `what-openai-did` 当前状态仍是 `deferred`，且可在后续 cycle 中继续观察
    - 下一轮 maintenance 中继续复跑 baseline，并只额外观察这一条 candidate
 3. 如果走网页版 MVP 主线：
    - 先把当前状态视为 `Web MVP baseline stable`
    - 不要重新讨论页面清单、Sources/AI Settings/Ask 的大方向设计
    - 当前 `uncertainty_status` 默认提交语义问题已修复，不要重复开工
    - 当前 Ask history 与 AI provider config 都已完成 `DB-first + JSON fallback` 收口，不要再把它们当成未完成主线
+   - 当前 `/web/ask` 展示层最小收口已完成，不要重开 Ask metadata / evidence / empty state 统一任务
+   - 当前 `/web/review` 与 `/web/ask` 的共享展示术语已统一，不要再把 wording 收口当默认下一步
    - 下一步优先级应为：
-     - 基于 `docs/ask_result_display_optimization.md` 完善 Ask 结果展示
+     - 在现有稳定基线之上选择新的小型页面质量任务
      - 或回到内容维护主线继续 baseline maintenance
 4. 无论走哪条主线，都不要擅自扩展抓取器能力或重构稳定主链路
 
@@ -919,7 +921,7 @@ See:
 > 先阅读 `ARCH_CONTEXT.md`、`docs/application_url_batch_workflow.md`、`scripts/real_seed_sources/BASELINE_SEED_STATUS.md`、`scripts/real_seed_sources/SEED_MAINTENANCE_NOTE.md`。  
 > 当前项目已经明确两条主线：内容维护主线，以及网页版 MVP 主线。  
 > 如果当前目标是内容维护：不要重新讨论 CLI/API 最小入口、URL 导入器、seed 目录结构或环境验证闭环；继续围绕 baseline maintenance 与 `what-openai-did` 的 observation-oriented maintenance 推进。  
-> 如果当前目标是网页产品主线：当前应把项目理解为“Web MVP baseline stable + Review 结构化审核已扩到 opportunities/risks/uncertainties + Ask 已开始优先消费 reviewed evidence + Ask history / AI provider config 已完成 DB-first 收口”。不要再回到信息架构空谈，也不要重开 Sources / AI Settings / Ask 的大方向设计；优先基于 `docs/ask_result_display_optimization.md` 推进 Ask 结果展示优化，而不是重复做存储收口或重开 `uncertainty_status` 修复。  
+> 如果当前目标是网页产品主线：当前应把项目理解为“Web MVP baseline stable + Review 结构化审核已扩到 opportunities/risks/uncertainties + Ask 已开始优先消费 reviewed evidence + Ask history / AI provider config 已完成 DB-first 收口 + `/web/ask` 展示层最小收口已完成 + `/web/review` 与 `/web/ask` 共享展示术语已统一”。不要再回到信息架构空谈，也不要重开 Sources / AI Settings / Ask 的大方向设计；优先选择新的小型页面质量任务，而不是重复做 Ask 展示收口、存储收口或 `uncertainty_status` 修复。  
 > 无论哪条主线，除非暴露明确回归，否则都不要修改 `orchestrator`、`persistence`、`processing`、`domain`、CLI/API 主路径，也不要扩展抓取器能力。
 ### 最小本地存储改造方案（不动主知识存储）
 
@@ -1101,3 +1103,57 @@ Use this rule instead:
 > Do not reopen Ask display optimization, Ask history DB migration, AI provider config DB migration, or summary review alignment as the default next step.
 > If the session goal is content maintenance, continue baseline maintenance.
 > If the session goal is Web/product iteration, start from the next highest-value quality/efficiency task on top of the already-stable Review/Ask baseline.
+
+## 8. Latest Progress Addendum (2026-04-29)
+
+This addendum overrides older notes that still treat the 2026-04-21 maintenance rerun or Ask/Review display-wording cleanup as unfinished.
+
+### Completed in this round
+
+- Formal seed baseline maintenance was rerun again on 2026-04-29.
+- Under restricted local environment, the rerun first failed with `URLError: [WinError 10013]`.
+- This failure was classified as environment/network restriction rather than application regression.
+- In a network-enabled environment, the same baseline rerun succeeded with `4/4` items passed.
+- `what-openai-did` was rerun as an observation-only candidate and succeeded, but remains `deferred`.
+- `/web/ask` display-layer cleanup has been completed:
+  - history/result metadata presentation is unified
+  - evidence labels and empty-state wording are easier to scan
+  - behavior remains unchanged
+- `/web/review` and `/web/ask` now also share more consistent page-level wording:
+  - `Effective Values`
+  - `Review History`
+  - aligned empty-state wording for reviewed objects
+
+### Updated stable understanding
+
+At the current stage, the project should now be understood as:
+
+- `content maintenance baseline stable`
+- `Web MVP baseline stable`
+- formal baseline rerun is proven again as of 2026-04-29 in network-enabled environment
+- `what-openai-did` is still observation-only and remains `deferred`
+- Ask display optimization is complete
+- Review / Ask shared display semantics have been further unified
+
+### Important boundary that remains
+
+- Do not misclassify `URLError: [WinError 10013]` in restricted local environment as a code regression by default.
+- Do not promote `what-openai-did` to formal seed automatically from a single successful observation rerun.
+- Do not reopen as default next tasks:
+  - Ask display cleanup
+  - Review / Ask wording cleanup
+  - Ask history DB migration
+  - AI provider config DB migration
+
+### Updated next-session starting point
+
+The next session should now start from one of these two paths:
+
+1. If the goal is content maintenance:
+   - continue baseline maintenance on the existing formal set
+   - keep distinguishing environment-restricted failure from true source failure
+   - continue observing `what-openai-did` without automatic promotion
+2. If the goal is Web/product iteration:
+   - treat Ask and Review display-semantics cleanup as already done
+   - pick a new small page-quality task on top of the stable baseline
+   - do not restart Ask display or Review wording cleanup as the default next step

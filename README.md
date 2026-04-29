@@ -218,8 +218,9 @@ pytest tests -q
   - 继续 baseline maintenance
   - 观察 `what-openai-did`
 - 网页产品主线：
-  - 优先修复 `uncertainty_status` 在无自动值场景下的页面默认提交语义问题
-  - 再决定是继续完善 Ask 结果展示，还是进入 Ask history 本地存储收口
+  - 当前应视为 `Web MVP baseline stable`
+  - 不要重开 `uncertainty_status` 修复、Ask 展示收口、Ask history 本地存储收口、AI provider config 收口
+  - 下一步应选择新的小型页面质量任务，而不是重复做已完成收口
 
 ## 文档导航
 
@@ -255,5 +256,24 @@ What this means in practice:
 - effective values are resolved at read time
 - `reset to auto` is supported
 - Ask consumes effective values instead of blindly trusting raw automatic output
+
+For the latest handoff status and the most reasonable next-session starting point, always prefer [ARCH_CONTEXT.md](./ARCH_CONTEXT.md).
+
+## Latest Status Update (2026-04-29)
+
+This section supplements the older update above.
+
+- Formal seed baseline maintenance was rerun again on 2026-04-29.
+- In restricted environment, the first failure was `URLError: [WinError 10013]`, treated as environment/network restriction rather than code regression.
+- In a network-enabled environment, the formal baseline rerun succeeded with `4/4` items passed.
+- `what-openai-did` succeeded in observation rerun, but remains `deferred`.
+- `/web/ask` display-layer cleanup has been completed.
+- `/web/review` and `/web/ask` now share more consistent page-level wording and empty-state semantics.
+
+What this means in practice:
+
+- content maintenance baseline remains stable
+- Web MVP display semantics have been further unified
+- Ask display cleanup and Review / Ask wording cleanup should not be reopened as default next tasks
 
 For the latest handoff status and the most reasonable next-session starting point, always prefer [ARCH_CONTEXT.md](./ARCH_CONTEXT.md).
