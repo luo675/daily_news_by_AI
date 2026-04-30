@@ -129,6 +129,22 @@ class _QueuedReadSession:
         self.closed = True
 
 
+class _WriteSession(_QueuedReadSession):
+    def __init__(self, *, scalar_values=None):
+        super().__init__(scalar_values=scalar_values)
+        self.commits = 0
+        self.rollbacks = 0
+
+    def commit(self) -> None:
+        self.commits += 1
+
+    def rollback(self) -> None:
+        self.rollbacks += 1
+
+    def add(self, item) -> None:
+        return None
+
+
 class _FakeDatabaseReviewService:
     def __init__(self, session):
         self.session = session
@@ -229,6 +245,9 @@ def test_get_dashboard_data_returns_stable_recent_document_contract(monkeypatch)
     assert data["recent_documents"][0]["source_name"] == "Example Source"
     assert data["recent_documents"][0]["status"] == "processed"
     assert data["recent_documents"][0]["published_at"] == "2026-04-27 12:00:00+00:00"
+    assert data["recent_documents"][0]["opportunity_count"] == 0
+    assert data["recent_documents"][0]["risk_count"] == 0
+    assert data["recent_documents"][0]["uncertainty_count"] == 0
     assert data["top_topics"] == [("AI Coding", 5)]
     assert data["providers"][0].name == "Local QA Provider"
     assert data["system_status"]["database_label"] == "available"
@@ -292,6 +311,9 @@ def test_dashboard_page_renders_recent_summary_and_system_status(monkeypatch, wo
                     "published_at": "2026-04-27 12:00:00+00:00",
                     "status": "processed",
                     "summary_text": "Manual effective summary for AI coding tools.",
+                    "opportunity_count": 2,
+                    "risk_count": 0,
+                    "uncertainty_count": 1,
                 }
             ],
             "top_topics": [("AI Coding", 5)],
@@ -319,6 +341,13 @@ def test_dashboard_page_renders_recent_summary_and_system_status(monkeypatch, wo
     assert "Manual effective summary for AI coding tools." in response.text
     assert "processed" in response.text
     assert "2026-04-27 12:00:00+00:00" in response.text
+    assert "\u5feb\u901f\u5165\u53e3" in response.text
+    assert "/web/documents" in response.text
+    assert "/web/ask" in response.text
+    assert "/web/review" in response.text
+    assert "\u673a\u4f1a: 2" in response.text
+    assert "\u98ce\u9669: 0" in response.text
+    assert "\u4e0d\u786e\u5b9a\u6027: 1" in response.text
 
 
 def test_dashboard_page_renders_english_shell_when_lang_query_requests_en(monkeypatch, workspace_tmp_path: Path) -> None:
@@ -327,7 +356,20 @@ def test_dashboard_page_renders_english_shell_when_lang_query_requests_en(monkey
         "get_dashboard_data",
         lambda: {
             "counts": {"sources": 3, "documents": 12, "watchlist": 2, "reviews": 4},
-            "recent_documents": [],
+            "recent_documents": [
+                {
+                    "id": str(uuid.uuid4()),
+                    "title": "\u4e2d\u6587\u539f\u59cb\u6807\u9898",
+                    "source_name": "Example Source",
+                    "created_at": "2026-04-28 09:30:00+00:00",
+                    "published_at": "-",
+                    "status": "processed",
+                    "summary_text": "\u539f\u59cb\u4e2d\u6587\u6458\u8981\u4e0d\u7ffb\u8bd1",
+                    "opportunity_count": 1,
+                    "risk_count": 0,
+                    "uncertainty_count": 1,
+                }
+            ],
             "top_topics": [],
             "providers": [],
             "qa_history": [],
@@ -349,6 +391,16 @@ def test_dashboard_page_renders_english_shell_when_lang_query_requests_en(monkey
     assert "Dashboard" in response.text
     assert "System Status" in response.text
     assert "Recent Documents" in response.text
+    assert "Quick Actions" in response.text
+    assert "Open Documents" in response.text
+    assert "Ask Local Knowledge" in response.text
+    assert "Review Queue" in response.text
+    assert "Signals" in response.text
+    assert "Opportunities: 1" in response.text
+    assert "Risks: 0" in response.text
+    assert "Uncertainties: 1" in response.text
+    assert "\u4e2d\u6587\u539f\u59cb\u6807\u9898" in response.text
+    assert "\u539f\u59cb\u4e2d\u6587\u6458\u8981\u4e0d\u7ffb\u8bd1" in response.text
     assert "Top Topics" in response.text
     assert "AI Providers" in response.text
     assert "控制台" not in response.text
@@ -405,6 +457,10 @@ def test_documents_page_uses_document_view_contract(monkeypatch, workspace_tmp_p
                     "published_at": "2026-04-27 12:00:00+00:00",
                     "summary_text": "Manual effective summary for AI coding tools.",
                     "key_points": ["Manual key point about AI coding workflows."],
+                    "created_at": "2026-04-27 13:00:00+00:00",
+                    "opportunity_count": 2,
+                    "risk_count": 1,
+                    "uncertainty_count": 1,
                 }
             ],
             None,
@@ -437,6 +493,66 @@ def test_documents_page_uses_document_view_contract(monkeypatch, workspace_tmp_p
     assert "processed" in response.text
     assert "en" in response.text
     assert "2026-04-27 12:00:00+00:00" in response.text
+    assert "\u8be6\u60c5" in response.text
+    assert "\u673a\u4f1a: 2" in response.text
+    assert "\u98ce\u9669: 1" in response.text
+    assert "\u4e0d\u786e\u5b9a\u6027: 1" in response.text
+
+
+def test_document_time_value_falls_back_to_created_at_then_dash() -> None:
+    assert web_routes._document_time_value({"published_at": None, "created_at": "2026-04-27"}) == "2026-04-27"
+    assert web_routes._document_time_value({"published_at": "", "created_at": "2026-04-27"}) == "2026-04-27"
+    assert web_routes._document_time_value({"published_at": "-", "created_at": "2026-04-27"}) == "2026-04-27"
+    assert web_routes._document_time_value({"published_at": None, "created_at": None}) == "-"
+    assert web_routes._document_time_value({"published_at": "", "created_at": ""}) == "-"
+    assert web_routes._document_time_value({"published_at": "-", "created_at": "-"}) == "-"
+
+
+def test_documents_page_renders_english_shell_without_translating_knowledge(
+    monkeypatch,
+    workspace_tmp_path: Path,
+) -> None:
+    document_id = str(uuid.uuid4())
+    monkeypatch.setattr(
+        web_routes.service,
+        "list_document_views",
+        lambda query="", source_id="": (
+            [
+                {
+                    "id": document_id,
+                    "title": "\u4e2d\u6587\u6807\u9898",
+                    "source_name": "Example Source",
+                    "language": "zh",
+                    "status": "processed",
+                    "published_at": "-",
+                    "created_at": "2026-04-27 13:00:00+00:00",
+                    "summary_text": "\u8fd9\u662f\u539f\u59cb\u4e2d\u6587\u6458\u8981\uff0c\u4e0d\u5e94\u88ab\u7ffb\u8bd1\u3002",
+                    "key_points": [],
+                    "opportunity_count": 0,
+                    "risk_count": 0,
+                    "uncertainty_count": 1,
+                }
+            ],
+            None,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(web_routes.service, "list_sources", lambda: ([], None))
+
+    client = TestClient(create_app())
+    response = client.get("/web/documents?lang=en")
+
+    assert response.status_code == 200
+    assert "Documents / Knowledge" in response.text
+    assert "Signals" in response.text
+    assert "Opportunities" in response.text
+    assert "Risks" in response.text
+    assert "Uncertainties" in response.text
+    assert "Details" in response.text
+    assert "Published / Created" in response.text
+    assert "\u4e2d\u6587\u6807\u9898" in response.text
+    assert "\u8fd9\u662f\u539f\u59cb\u4e2d\u6587\u6458\u8981\uff0c\u4e0d\u5e94\u88ab\u7ffb\u8bd1\u3002" in response.text
+    assert f"/web/documents/{document_id}" in response.text
 
 
 def test_documents_page_renders_empty_state_with_current_filters(monkeypatch, workspace_tmp_path: Path) -> None:
@@ -607,6 +723,7 @@ def test_document_detail_renders_empty_entity_and_topic_states(monkeypatch, work
 def test_list_source_page_views_returns_stable_contract(monkeypatch) -> None:
     service = WebMvpService()
     source = _build_source_model()
+    source.config["_web"]["owner"] = "News desk"
     session = _QueuedReadSession(scalars_values=[[source]])
 
     monkeypatch.setattr(service, "_try_create_db_session", lambda: session)
@@ -620,11 +737,12 @@ def test_list_source_page_views_returns_stable_contract(monkeypatch) -> None:
     assert views[0]["credibility_level"] == "B"
     assert views[0]["fetch_strategy"] == "manual"
     assert views[0]["is_active"] is True
-    assert views[0]["activity_label"] == "active"
+    assert views[0]["activity_label"] == "enabled"
     assert views[0]["maintenance_status"] == "ordinary"
     assert views[0]["notes"] == "Stable manual source."
     assert views[0]["last_import_at"] == "2026-04-28T09:30:00+00:00"
     assert views[0]["last_result"] == "success"
+    assert views[0]["web_metadata"]["owner"] == "News desk"
     assert "rss_url" in views[0]["raw_config_json"]
 
 
@@ -646,15 +764,74 @@ def test_get_source_page_view_degrades_missing_fields(monkeypatch) -> None:
     assert view["name"] == "Unnamed source"
     assert view["editable_name"] == ""
     assert view["url"] == "-"
+    assert view["source_type"] == "manual_import"
+    assert view["credibility_level"] == "B"
     assert view["fetch_strategy"] == "-"
+    assert view["activity_label"] == "enabled"
     assert view["maintenance_status"] == "ordinary"
     assert view["notes"] == ""
     assert view["last_import_at"] == "-"
     assert view["last_result"] == "-"
+    assert view["web_metadata"] == {}
+
+
+def test_update_source_preserves_existing_extra_web_metadata(monkeypatch) -> None:
+    service = WebMvpService()
+    source = _build_source_model()
+    source.config["_web"]["owner"] = "News desk"
+    session = _WriteSession(scalar_values=[source])
+
+    monkeypatch.setattr(service, "_try_create_db_session", lambda: session)
+
+    message = service.update_source(
+        str(source.id),
+        {
+            "name": "Updated Source",
+            "source_type": "manual_import",
+            "url": "https://example.com/updated",
+            "credibility_level": "A",
+            "fetch_strategy": "manual",
+            "maintenance_status": "deferred_candidate",
+            "notes": "Updated notes.",
+            "is_active": "on",
+            "config_json": '{"rss_url":"https://example.com/updated.xml"}',
+        },
+    )
+
+    assert message == "Source updated."
+    assert session.commits == 1
+    assert source.config["_web"]["owner"] == "News desk"
+    assert source.config["_web"]["maintenance_status"] == "deferred_candidate"
+    assert source.config["_web"]["notes"] == "Updated notes."
+    assert source.config["rss_url"] == "https://example.com/updated.xml"
+
+
+def test_import_source_failure_preserves_existing_extra_web_metadata(monkeypatch) -> None:
+    service = WebMvpService()
+    source = _build_source_model()
+    source.config["_web"]["owner"] = "News desk"
+    session = _WriteSession(scalar_values=[source, source])
+
+    monkeypatch.setattr(service, "_try_create_db_session", lambda: session)
+    monkeypatch.setattr(
+        "src.web.service.import_url_as_raw_document",
+        lambda url: (_ for _ in ()).throw(RuntimeError("network blocked")),
+    )
+
+    message = service.import_source(str(source.id))
+
+    assert message.startswith("Source import failed: RuntimeError: network blocked")
+    assert session.rollbacks == 1
+    assert session.commits == 1
+    assert source.config["_web"]["owner"] == "News desk"
+    assert source.config["_web"]["maintenance_status"] == "ordinary"
+    assert source.config["_web"]["notes"] == "Stable manual source."
+    assert str(source.config["_web"]["last_result"]).startswith("failed: RuntimeError: network blocked")
 
 
 def test_sources_page_uses_source_page_view_contract(monkeypatch, workspace_tmp_path: Path) -> None:
     source_id = str(uuid.uuid4())
+    disabled_source_id = str(uuid.uuid4())
     monkeypatch.setattr(
         web_routes.service,
         "list_source_page_views",
@@ -668,12 +845,29 @@ def test_sources_page_uses_source_page_view_contract(monkeypatch, workspace_tmp_
                     "credibility_level": "B",
                     "fetch_strategy": "manual",
                     "is_active": True,
-                    "activity_label": "active",
+                    "activity_label": "enabled",
                     "maintenance_status": "ordinary",
                     "notes": "Stable manual source.",
                     "last_import_at": "2026-04-28T09:30:00+00:00",
                     "last_result": "success",
+                    "web_metadata": {"owner": "News desk"},
                     "raw_config_json": "{\n  \"rss_url\": \"https://example.com/rss.xml\"\n}",
+                },
+                {
+                    "id": disabled_source_id,
+                    "name": "用户输入来源",
+                    "source_type": "-",
+                    "url": "-",
+                    "credibility_level": "-",
+                    "fetch_strategy": "-",
+                    "is_active": False,
+                    "activity_label": "disabled",
+                    "maintenance_status": "ordinary",
+                    "notes": "",
+                    "last_import_at": "-",
+                    "last_result": "-",
+                    "web_metadata": {},
+                    "raw_config_json": "",
                 }
             ],
             None,
@@ -693,6 +887,12 @@ def test_sources_page_uses_source_page_view_contract(monkeypatch, workspace_tmp_
     assert "来源目录" in response.text
     assert "Example Source" in response.text
     assert "manual_import" in response.text
+    assert "enabled" in response.text
+    assert "disabled" in response.text
+    assert "Stable manual source." in response.text
+    assert "News desk" in response.text
+    assert "用户输入来源" in response.text
+    assert ">-<" in response.text
     assert "ordinary" in response.text
     assert "success" in response.text
     assert "/web/sources/" in response.text
@@ -713,11 +913,12 @@ def test_sources_page_renders_english_shell_when_lang_query_requests_en(monkeypa
                     "credibility_level": "B",
                     "fetch_strategy": "manual",
                     "is_active": True,
-                    "activity_label": "active",
+                    "activity_label": "enabled",
                     "maintenance_status": "ordinary",
-                    "notes": "Stable manual source.",
+                    "notes": "用户备注不翻译",
                     "last_import_at": "2026-04-28T09:30:00+00:00",
                     "last_result": "success",
+                    "web_metadata": {"owner": "中文维护人"},
                     "raw_config_json": "{}",
                 }
             ],
@@ -734,6 +935,12 @@ def test_sources_page_renders_english_shell_when_lang_query_requests_en(monkeypa
     assert "Source Registry" in response.text
     assert "Add Source" in response.text
     assert "Create Source" in response.text
+    assert "Type" in response.text
+    assert "Credibility" in response.text
+    assert "Notes" in response.text
+    assert "enabled" in response.text
+    assert "用户备注不翻译" in response.text
+    assert "中文维护人" in response.text
     assert "来源目录" not in response.text
 
 
@@ -851,6 +1058,13 @@ def test_get_system_page_data_returns_stable_contract(monkeypatch) -> None:
     assert data["database_counts"][-1] == {"name": "review_edits", "count": 4}
     assert data["counts_error"] is None
     assert len(data["storage_files"]) == 2
+    assert data["storage_overview"][0]["area_key"] == "page.system.storage.main_knowledge"
+    assert data["storage_overview"][0]["primary_key"] == "page.system.storage.primary.postgres_pgvector"
+    assert data["storage_overview"][1]["area_key"] == "page.system.storage.ask_history"
+    assert data["storage_overview"][1]["primary_key"] == "page.system.storage.primary.db_first"
+    assert data["storage_overview"][1]["fallback_key"] == "page.system.storage.fallback.json"
+    assert data["storage_overview"][2]["area_key"] == "page.system.storage.ai_provider_config"
+    assert data["storage_overview"][3]["area_key"] == "page.system.storage.source_web_config"
 
 
 def test_get_system_page_data_degrades_when_counts_are_unavailable(monkeypatch) -> None:
@@ -908,6 +1122,36 @@ def test_system_page_uses_system_page_data_contract(monkeypatch, workspace_tmp_p
                 {"path": "configs/web/ai_settings.json", "exists_label": "yes", "size_bytes": 128},
                 {"path": "configs/web/qa_history.json", "exists_label": "no", "size_bytes": 0},
             ],
+            "storage_overview": [
+                {
+                    "area_key": "page.system.storage.main_knowledge",
+                    "primary_key": "page.system.storage.primary.postgres_pgvector",
+                    "fallback_key": "",
+                    "detail_key": "page.system.storage.detail.main_knowledge",
+                    "path": "",
+                },
+                {
+                    "area_key": "page.system.storage.ask_history",
+                    "primary_key": "page.system.storage.primary.db_first",
+                    "fallback_key": "page.system.storage.fallback.json",
+                    "detail_key": "page.system.storage.detail.ask_history",
+                    "path": "configs/web/qa_history.json",
+                },
+                {
+                    "area_key": "page.system.storage.ai_provider_config",
+                    "primary_key": "page.system.storage.primary.db_first",
+                    "fallback_key": "page.system.storage.fallback.json",
+                    "detail_key": "page.system.storage.detail.ai_provider_config",
+                    "path": "configs/web/ai_settings.json",
+                },
+                {
+                    "area_key": "page.system.storage.source_web_config",
+                    "primary_key": "page.system.storage.primary.source_config_web",
+                    "fallback_key": "page.system.storage.fallback.retained",
+                    "detail_key": "page.system.storage.detail.source_web_config",
+                    "path": "",
+                },
+            ],
         },
         raising=False,
     )
@@ -928,6 +1172,69 @@ def test_system_page_uses_system_page_data_contract(monkeypatch, workspace_tmp_p
     assert "available" in response.text
     assert "configs/web/ai_settings.json" in response.text
     assert "yes" in response.text
+    assert "\u5b58\u50a8\u6982\u89c8" in response.text
+    assert "\u4e3b\u77e5\u8bc6\u5b58\u50a8" in response.text
+    assert "PostgreSQL + pgvector" in response.text
+    assert "Ask history" in response.text
+    assert "DB-first" in response.text
+    assert "JSON fallback" in response.text
+    assert "AI provider config" in response.text
+    assert "Source.config" in response.text
+    assert "_web" in response.text
+    assert "api_key" not in response.text
+    assert "secret-key" not in response.text
+
+
+def test_system_page_renders_english_storage_shell(monkeypatch, workspace_tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        web_routes.service,
+        "get_system_page_data",
+        lambda: {
+            "checks": [{"label": "Database connection", "status": "available", "detail": "ok"}],
+            "database_counts": [{"name": "documents", "count": 12}],
+            "counts_error": None,
+            "storage_files": [],
+            "storage_overview": [
+                {
+                    "area_key": "page.system.storage.main_knowledge",
+                    "primary_key": "page.system.storage.primary.postgres_pgvector",
+                    "fallback_key": "",
+                    "detail_key": "page.system.storage.detail.main_knowledge",
+                    "path": "",
+                },
+                {
+                    "area_key": "page.system.storage.ask_history",
+                    "primary_key": "page.system.storage.primary.db_first",
+                    "fallback_key": "page.system.storage.fallback.json",
+                    "detail_key": "page.system.storage.detail.ask_history",
+                    "path": "configs/web/qa_history.json",
+                },
+                {
+                    "area_key": "page.system.storage.ai_provider_config",
+                    "primary_key": "page.system.storage.primary.db_first",
+                    "fallback_key": "page.system.storage.fallback.json",
+                    "detail_key": "page.system.storage.detail.ai_provider_config",
+                    "path": "configs/web/ai_settings.json",
+                },
+            ],
+        },
+        raising=False,
+    )
+
+    client = TestClient(create_app())
+    response = client.get("/web/system?lang=en")
+
+    assert response.status_code == 200
+    assert "System / Storage" in response.text
+    assert "Storage Overview" in response.text
+    assert "Main knowledge storage" in response.text
+    assert "Web configuration storage" in response.text
+    assert "Ask history" in response.text
+    assert "AI provider config" in response.text
+    assert "DB-first" in response.text
+    assert "JSON fallback" in response.text
+    assert "PostgreSQL + pgvector" in response.text
+    assert "api_key" not in response.text
 
 
 def test_system_page_renders_empty_and_degraded_states(monkeypatch, workspace_tmp_path: Path) -> None:
@@ -942,6 +1249,15 @@ def test_system_page_renders_empty_and_degraded_states(monkeypatch, workspace_tm
             "database_counts": [],
             "counts_error": "Database session unavailable.",
             "storage_files": [],
+            "storage_overview": [
+                {
+                    "area_key": "page.system.storage.ask_history",
+                    "primary_key": "page.system.storage.primary.db_first",
+                    "fallback_key": "page.system.storage.fallback.json",
+                    "detail_key": "page.system.storage.detail.ask_history",
+                    "path": "configs/web/qa_history.json",
+                }
+            ],
         },
         raising=False,
     )
@@ -953,6 +1269,8 @@ def test_system_page_renders_empty_and_degraded_states(monkeypatch, workspace_tm
     assert "数据库提示:" in response.text
     assert "部分页面数据暂不可用。" in response.text
     assert "Database session unavailable." in response.text
+    assert "DB-first" in response.text
+    assert "JSON fallback" in response.text
     assert "暂无数据库计数。" in response.text
     assert "暂无存储文件。" in response.text
 
@@ -970,6 +1288,7 @@ def test_system_page_renders_real_counts_query_error(monkeypatch, workspace_tmp_
             "database_counts": [],
             "counts_error": "RuntimeError: count query timeout",
             "storage_files": [],
+            "storage_overview": [],
         },
         raising=False,
     )

@@ -1341,3 +1341,105 @@ If the next session is Web/product iteration, the most reasonable next task is:
   - default `zh`
   - explicit `?lang=en`
   - cookie fallback behavior
+
+## 12. Latest Progress Addendum (2026-04-30 Web page quality pass)
+
+This addendum overrides older notes that still treat Documents, Dashboard, or System page scanability as unfinished default Web tasks.
+
+### Completed in this round
+
+- Documents / Knowledge page scanability optimization is complete.
+  - The list view now surfaces title, source, status, language, published/created time, summary preview, lightweight structured signals, and a detail link.
+  - `?lang=en` switches shell copy to English while leaving knowledge content, summaries, evidence, and review payloads untranslated.
+- Dashboard information-density optimization is complete.
+  - `/web/dashboard` now works better as the daily Web MVP entry page.
+  - It shows recent documents with source, status, time, summary, lightweight signals, system status, and quick entries for Documents, Ask, and Review.
+- System / Storage overview is complete.
+  - `/web/system` now clearly distinguishes main knowledge storage from Web peripheral configuration storage.
+  - It records:
+    - main knowledge storage: `PostgreSQL + pgvector`
+    - Ask history: `DB-first + JSON fallback`
+    - AI provider config: `DB-first + JSON fallback`
+    - `Source.config["_web"]`: intentionally retained, not a migration target
+  - Database degradation is displayed as a page note rather than becoming a 500.
+  - API keys are not shown in plain text.
+
+### Important boundary that remains
+
+- `risk_count=0` on Documents/Dashboard remains the conservative display when there is no document-level risk association available.
+- Do not add a new risk model just to make the page signal richer.
+- Do not expand System / Storage into a full operations dashboard.
+- Do not change the storage strategy while working on System page display.
+
+### Do not reopen by default
+
+The following Web page-quality tasks are now complete and should not be picked as default next steps:
+
+- Documents signals/detail-column optimization
+- Dashboard quick actions/signals optimization
+- System storage overview
+
+### Updated next-session starting point
+
+If the next session is Web/product iteration, pick a new small page-quality task on top of the stable baseline.
+
+Good candidates include:
+
+- Watchlist page scanability or related-document presentation
+- Review page efficiency small improvement
+
+Do not restart Documents, Dashboard, or System information-density work unless a concrete regression is reported.
+
+## 13. Latest Progress Addendum (2026-04-30 Sources scanability pass)
+
+This addendum overrides older notes that still list Sources scanability or maintenance metadata clarity as the default next Web task.
+
+### Completed in this round
+
+- Sources page scanability optimization is complete.
+- `/web/sources` now functions as a clearer human-maintained source list.
+- The Sources list now surfaces:
+  - source name
+  - notes / description fallback
+  - source type
+  - URL
+  - credibility level
+  - `enabled` / `disabled` status
+  - Web maintenance metadata
+  - existing action entry points
+- `Source.config["_web"]` remains lightweight maintenance metadata for the Web layer.
+  - It is read for display.
+  - It is not a formal schema.
+  - It is not a migration target.
+- Extra `_web` metadata, such as `owner`, is preserved when ordinary edit or import metadata write-back updates the standard fields.
+- Current verification for this Web page-quality round was:
+  - `pytest tests\test_web_dashboard_documents.py -q`
+  - `pytest -q`
+  - final reported suite result: `111 passed`
+
+### Important boundary that remains
+
+- Do not describe this as source registry expansion.
+- Do not describe this as automatic source discovery or crawling support.
+- Do not promote `Source.config["_web"]` into a domain schema or migration target by default.
+- Do not change source storage strategy just to make the Sources page richer.
+
+### Do not reopen by default
+
+The following Web page-quality tasks are now complete and should not be picked as default next steps:
+
+- Documents signals/detail-column optimization
+- Dashboard quick actions/signals optimization
+- System storage overview
+- Sources scanability / maintenance metadata display
+
+### Updated next-session starting point
+
+If the next session is Web/product iteration, pick a new small page-quality task on top of the stable baseline.
+
+Good candidates include:
+
+- Watchlist page scanability optimization
+- Review page efficiency small improvement
+
+Do not restart Documents, Dashboard, System, or Sources information-density work unless a concrete regression is reported.

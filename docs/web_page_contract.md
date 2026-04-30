@@ -77,7 +77,12 @@ When a page has active filters, the empty state should mention the filter contex
     - `published_at`
     - `status`
     - `summary_text`
+    - `opportunity_count`
+    - `risk_count`
+    - `uncertainty_count`
   - summary must prefer reviewed effective summary values
+  - time display renders `published_at` first and falls back to `created_at`
+  - signal counts are lightweight dashboard hints; unavailable document-level risks render as `0`
   - empty state: `[]`, rendered as `No recent documents available.`
 - `system_status`
   - keys:
@@ -110,10 +115,18 @@ When a page has active filters, the empty state should mention the filter contex
 Dashboard terminology:
 
 - `System Status`
+- `Quick Actions`
 - `Recent Documents`
+- `Signals`
 - `Top Topics`
 - `AI Providers`
 - `Recent Q&A`
+
+Dashboard quick actions:
+
+- `Open Documents` -> `/web/documents`
+- `Ask Local Knowledge` -> `/web/ask`
+- `Review Queue` -> `/web/review`
 
 ## Documents List Contract
 
@@ -128,20 +141,27 @@ Dashboard terminology:
 - `summary_text`
 - `key_points`
 - `created_at`
+- `opportunity_count`
+- `risk_count`
+- `uncertainty_count`
 
 Downgrade rules:
 
 - blank title -> `Untitled document`
 - missing source -> `-`
-- missing status/language/published time -> `-`
+- missing status/language/published or created time -> `-`
 - missing summary text -> try effective `key_points`
 - no summary and no key points -> `summary_text='-'`
+- unavailable document-level risks -> `risk_count=0`
 - empty result set -> `[]`
 
 Documents list rendering rules:
 
 - list column order follows detail-page semantics:
-  - `source -> status -> language -> published -> summary`
+  - `source -> status -> language -> published/created -> summary -> signals -> detail`
+- time column renders `published_at` first and falls back to `created_at`
+- signals column renders lightweight counts for opportunities, risks, and uncertainties
+- detail column links to `/web/documents/{document_id}`
 - search form must echo current `q` and `source_id`
 - page must show a `Filters currently applied` block
 - source filter summary:
@@ -203,6 +223,7 @@ Downgrade rules:
 - `notes`
 - `last_import_at`
 - `last_result`
+- `web_metadata`
 - `raw_config_json`
 
 `WebMvpService.get_source_page_view()` returns the same field set for the detail page.
@@ -212,15 +233,31 @@ Downgrade rules:
 - blank source name -> `Unnamed source`
 - blank source name keeps `editable_name=''` so detail-form inputs do not write display fallbacks back into source data
 - missing URL / fetch strategy / last import / last result -> `-`
+- missing source type / credibility level -> `-`
 - blank maintenance status -> `ordinary`
 - blank notes -> empty string in form fields, `-` in read-only note display
+- empty `web_metadata` -> no extra metadata rows beyond standard fetch/maintenance/import/result rows
+- enabled state uses `activity_label='enabled'`; disabled state uses `activity_label='disabled'`
 
 Sources rendering rules:
 
 - list and detail pages read from source page view dicts, not ORM attributes
-- empty list state -> `No sources available.`
+- list view columns show:
+  - source name
+  - source type
+  - URL
+  - credibility level
+  - enabled/disabled status chip
+  - Web maintenance metadata
+  - actions
+- list source-name cells also show source notes with `-` fallback; user-entered names, URLs, notes, and metadata values are not translated
+- source type and credibility level are rendered as lightweight scan chips
+- `Source.config["_web"]` is read only for existing lightweight maintenance display; known standard fields are `maintenance_status`, `notes`, `last_import_at`, and `last_result`, and any additional non-empty keys are displayed as metadata rows
+- empty list state -> `No sources available. Add a manually maintained source or check the database connection.`
 - DB degradation note uses the shared database-note wording
 - detail page maintenance status and activity label must use the same contract fields shown in the list
+- the Sources page does not create a formal schema for `Source.config["_web"]`
+- the Sources page does not add source discovery, crawling, registry expansion, migrations, or new CRUD flows beyond existing edit/detail/toggle/import entry points
 
 Sources terminology:
 
@@ -229,6 +266,7 @@ Sources terminology:
 - `Maintenance status`
 - `Last import`
 - `Last result`
+- `Web metadata`
 
 ## Review Contract
 
@@ -356,9 +394,23 @@ Current non-goal:
     - `no`
   - missing path fallback -> `-`
   - empty state -> `No storage files available.`
+- `storage_overview`
+  - list items with:
+    - `area_key`
+    - `primary_key`
+    - `fallback_key`
+    - `detail_key`
+    - `path`
+  - current storage facts:
+    - main knowledge storage -> `PostgreSQL + pgvector`
+    - Ask history -> `DB-first` + `JSON fallback`
+    - AI provider config -> `DB-first` + `JSON fallback`
+    - `Source.config["_web"]` remains in source config and is not a migration target
+  - must not render API keys in plain text
 
 System / Storage terminology:
 
+- `Storage Overview`
 - `System Checks`
 - `Database Counts`
 - `Storage Files`
@@ -368,3 +420,4 @@ Rendering rules:
 - the page reads only from `get_system_page_data()`
 - degraded probe results are shown through `status=degraded` plus the returned detail
 - counts degradation additionally shows the shared database note
+- storage overview is informational only and does not change storage strategy

@@ -277,6 +277,9 @@ class WebMvpService:
             source.is_active = form.get("is_active") == "on"
 
             config = self._parse_json_field(form.get("config_json"))
+            if current_meta:
+                config = dict(config or {})
+                config["_web"] = current_meta
             source.config = self._set_source_web_metadata(
                 config,
                 maintenance_status=maintenance_status,
@@ -419,7 +422,15 @@ class WebMvpService:
                 stmt = stmt.where(Document.source_id == uuid.UUID(source_id))
             documents = list(session.scalars(stmt))
             review_service = DatabaseReviewService(session)
-            return [self._build_document_list_view(document, review_service) for document in documents]
+            opportunities_by_document = self._collect_opportunities_by_document(documents, review_service)
+            return [
+                self._build_document_list_view(
+                    document,
+                    review_service,
+                    opportunities=opportunities_by_document.get(document.id, []),
+                )
+                for document in documents
+            ]
 
         return self._run_db_read(_query, empty=[])
 
@@ -1162,8 +1173,13 @@ class WebMvpService:
                     )
                 )
                 review_service = DatabaseReviewService(session)
+                opportunities_by_document = self._collect_opportunities_by_document(raw_recent_documents, review_service)
                 recent_documents = [
-                    self._build_dashboard_recent_document_view(document, review_service)
+                    self._build_dashboard_recent_document_view(
+                        document,
+                        review_service,
+                        opportunities=opportunities_by_document.get(document.id, []),
+                    )
                     for document in raw_recent_documents
                 ]
                 topic_rows = session.execute(
@@ -1277,7 +1293,40 @@ class WebMvpService:
             "database_counts": database_counts,
             "counts_error": counts_error,
             "storage_files": storage_files,
+            "storage_overview": self._build_system_storage_overview(),
         }
+
+    def _build_system_storage_overview(self) -> list[dict[str, str]]:
+        return [
+            {
+                "area_key": "page.system.storage.main_knowledge",
+                "primary_key": "page.system.storage.primary.postgres_pgvector",
+                "fallback_key": "",
+                "detail_key": "page.system.storage.detail.main_knowledge",
+                "path": "",
+            },
+            {
+                "area_key": "page.system.storage.ask_history",
+                "primary_key": "page.system.storage.primary.db_first",
+                "fallback_key": "page.system.storage.fallback.json",
+                "detail_key": "page.system.storage.detail.ask_history",
+                "path": str(QA_HISTORY_PATH),
+            },
+            {
+                "area_key": "page.system.storage.ai_provider_config",
+                "primary_key": "page.system.storage.primary.db_first",
+                "fallback_key": "page.system.storage.fallback.json",
+                "detail_key": "page.system.storage.detail.ai_provider_config",
+                "path": str(AI_SETTINGS_PATH),
+            },
+            {
+                "area_key": "page.system.storage.source_web_config",
+                "primary_key": "page.system.storage.primary.source_config_web",
+                "fallback_key": "page.system.storage.fallback.retained",
+                "detail_key": "page.system.storage.detail.source_web_config",
+                "path": "",
+            },
+        ]
 
     def list_source_type_values(self) -> list[str]:
         return [item.value for item in SourceType]
@@ -1800,8 +1849,11 @@ class WebMvpService:
         self,
         document: Document,
         review_service: DatabaseReviewService | None = None,
+        *,
+        opportunities: list[OpportunityAssessment] | None = None,
     ) -> dict[str, Any]:
         key_points = self._get_document_effective_key_points(document, review_service)
+        opportunity_items = opportunities or []
         return {
             "id": str(document.id),
             "title": self._coalesce_text(document.title, default="Untitled document"),
@@ -1814,6 +1866,9 @@ class WebMvpService:
             ),
             "key_points": key_points,
             "created_at": self._coalesce_text(str(document.created_at) if document.created_at else None),
+            "opportunity_count": len(opportunity_items),
+            "risk_count": 0,
+            "uncertainty_count": self._count_uncertain_opportunities(opportunity_items, review_service),
         }
 
     def _build_document_detail_view(
@@ -1851,8 +1906,11 @@ class WebMvpService:
         self,
         document: Document,
         review_service: DatabaseReviewService | None = None,
+        *,
+        opportunities: list[OpportunityAssessment] | None = None,
     ) -> dict[str, Any]:
         summary_text = self._build_document_summary_text(document, review_service)
+        opportunity_items = opportunities or []
         return {
             "id": str(document.id),
             "title": self._coalesce_text(document.title, default="Untitled document"),
@@ -1861,6 +1919,9 @@ class WebMvpService:
             "published_at": self._coalesce_text(str(document.published_at) if document.published_at else None),
             "status": self._coalesce_text(document.status),
             "summary_text": self._coalesce_text(self._truncate_text(summary_text, limit=160), default="-"),
+            "opportunity_count": len(opportunity_items),
+            "risk_count": 0,
+            "uncertainty_count": self._count_uncertain_opportunities(opportunity_items, review_service),
         }
 
     def _build_dashboard_system_status(
@@ -1935,6 +1996,23 @@ class WebMvpService:
             return []
         effective_values = self._get_summary_effective_values(document.summary, review_service)
         return self._normalize_string_list(effective_values.get("key_points"))
+
+    def _count_uncertain_opportunities(
+        self,
+        opportunities: list[OpportunityAssessment],
+        review_service: DatabaseReviewService | None = None,
+    ) -> int:
+        count = 0
+        for opportunity in opportunities:
+            auto_value = self._get_opportunity_auto_values(opportunity).get("uncertainty")
+            effective_value = (
+                review_service.get_effective_value("opportunity_score", opportunity.id, "uncertainty", auto_value)
+                if review_service is not None
+                else auto_value
+            )
+            if bool(effective_value):
+                count += 1
+        return count
 
     def _build_entity_label(self, entity: Entity | None) -> str:
         if entity is None:
@@ -2116,7 +2194,8 @@ class WebMvpService:
             .where(OpportunityEvidence.document_id.in_(document_ids))
             .order_by(OpportunityAssessment.updated_at.desc())
         )
-        opportunities = list(review_service.session.scalars(stmt).unique())
+        scalar_result = review_service.session.scalars(stmt)
+        opportunities = list(scalar_result.unique() if hasattr(scalar_result, "unique") else scalar_result)
         for opportunity in opportunities:
             linked_document_ids = {
                 evidence_item.document_id
@@ -2524,6 +2603,13 @@ class WebMvpService:
 
     def _build_source_page_view(self, source: Source) -> dict[str, Any]:
         source_view = self._build_source_view(source)
+        web_metadata = {
+            str(key): value
+            for key, value in self._get_source_web_metadata(source).items()
+            if key not in {"maintenance_status", "notes", "last_import_at", "last_result"}
+            and value is not None
+            and str(value).strip()
+        }
         return {
             "id": str(source.id),
             "name": self._coalesce_text(source.name, default="Unnamed source"),
@@ -2533,11 +2619,12 @@ class WebMvpService:
             "credibility_level": self._coalesce_text(source.credibility_level),
             "fetch_strategy": self._coalesce_text(source.fetch_strategy),
             "is_active": bool(source.is_active),
-            "activity_label": "active" if source.is_active else "disabled",
+            "activity_label": "enabled" if source.is_active else "disabled",
             "maintenance_status": self._coalesce_text(source_view.maintenance_status, default="ordinary"),
             "notes": str(source_view.notes or "").strip(),
             "last_import_at": self._coalesce_text(source_view.last_import_at),
             "last_result": self._coalesce_text(source_view.last_result),
+            "web_metadata": web_metadata,
             "raw_config_json": source_view.raw_config_json,
         }
 
@@ -2556,12 +2643,23 @@ class WebMvpService:
         last_result: str | None,
     ) -> dict[str, Any]:
         merged = dict(config or {})
-        merged["_web"] = {
-            "maintenance_status": maintenance_status,
-            "notes": notes,
-            "last_import_at": last_import_at,
-            "last_result": last_result,
+        current_web = merged.get("_web", {})
+        preserved_web = {
+            str(key): value
+            for key, value in (current_web.items() if isinstance(current_web, dict) else [])
+            if key not in {"maintenance_status", "notes", "last_import_at", "last_result"}
+            and value is not None
+            and str(value).strip()
         }
+        preserved_web.update(
+            {
+                "maintenance_status": maintenance_status,
+                "notes": notes,
+                "last_import_at": last_import_at,
+                "last_result": last_result,
+            }
+        )
+        merged["_web"] = preserved_web
         return merged
 
     def _read_json_records(self, path: Path) -> list[dict[str, Any]]:

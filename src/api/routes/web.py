@@ -143,6 +143,61 @@ def _empty_table_row(message: str, *, colspan: int) -> str:
     return f"<tr><td colspan='{colspan}'>{escape(message)}</td></tr>"
 
 
+def _as_non_negative_int(value: object) -> int:
+    try:
+        parsed = int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+    return max(parsed, 0)
+
+
+def _render_document_signal_chips(request: Request, document: dict[str, object]) -> str:
+    signals = [
+        ("page.documents.signal.opportunities", document.get("opportunity_count")),
+        ("page.documents.signal.risks", document.get("risk_count")),
+        ("page.documents.signal.uncertainties", document.get("uncertainty_count")),
+    ]
+    return "".join(
+        f"<span class='chip'>{escape(_text(request, key))}: {escape(str(_as_non_negative_int(value)))}</span>"
+        for key, value in signals
+    )
+
+
+def _render_source_metadata(request: Request, source: dict[str, object]) -> str:
+    rows: list[tuple[str, object]] = [
+        (_text(request, "page.sources.col.fetch"), source.get("fetch_strategy")),
+        (_text(request, "page.sources.maintenance_status"), source.get("maintenance_status")),
+        (_text(request, "page.sources.col.last_import"), source.get("last_import_at")),
+        (_text(request, "page.sources.col.last_result"), source.get("last_result")),
+    ]
+    web_metadata = source.get("web_metadata")
+    if isinstance(web_metadata, dict):
+        rows.extend((str(key), value) for key, value in web_metadata.items())
+    rendered = _render_text_rows(rows)
+    return rendered or "-"
+
+
+def _document_time_value(document: dict[str, object]) -> str:
+    def _valid_time(value: object) -> str:
+        if value is None:
+            return ""
+        text = str(value).strip()
+        return "" if text == "-" else text
+
+    published_at = _valid_time(document.get("published_at"))
+    if published_at:
+        return published_at
+    created_at = _valid_time(document.get("created_at"))
+    return created_at or "-"
+
+
+def _system_storage_text(request: Request, key: object, default: str = "-") -> str:
+    text = str(key or "").strip()
+    if not text:
+        return default
+    return _text(request, text, text)
+
+
 def _empty_list_item(message: str) -> str:
     return f"<li>{escape(message)}</li>"
 
@@ -389,9 +444,9 @@ async def dashboard(request: Request, message: str | None = None) -> HTMLRespons
         f"<tr><td><a href='/web/documents/{escape(str(doc['id']))}'>{escape(str(doc['title']))}</a></td>"
         f"<td>{escape(str(doc['source_name']))}</td>"
         f"<td>{escape(str(doc.get('status', '-')))}</td>"
-        f"<td>{escape(str(doc.get('published_at', '-')))}</td>"
-        f"<td>{escape(str(doc['created_at']))}</td>"
-        f"<td>{escape(str(doc.get('summary_text', '-')))}</td></tr>"
+        f"<td>{escape(_document_time_value(doc))}</td>"
+        f"<td>{escape(str(doc.get('summary_text', '-')))}</td>"
+        f"<td>{_render_document_signal_chips(request, doc)}</td></tr>"
         for doc in data["recent_documents"]
     ) or _empty_table_row(_text(request, "shared.no_recent_documents"), colspan=6)
     topics_html = "".join(
@@ -407,6 +462,16 @@ async def dashboard(request: Request, message: str | None = None) -> HTMLRespons
         for provider in data["providers"]
     ) or _empty_list_item(_text(request, "shared.no_providers"))
     db_note = _render_database_note(request, data["db_error"])
+    quick_actions_html = f"""
+      <section class="card">
+        <h2>{escape(_text(request, "page.dashboard.quick_actions"))}</h2>
+        <div class="chips">
+          <a class="nav-link" href="/web/documents">{escape(_text(request, "page.dashboard.action.documents"))}</a>
+          <a class="nav-link" href="/web/ask">{escape(_text(request, "page.dashboard.action.ask"))}</a>
+          <a class="nav-link" href="/web/review">{escape(_text(request, "page.dashboard.action.review"))}</a>
+        </div>
+      </section>
+    """
     body = f"""
     <div class="grid cols-3">
       <div class="card"><div class="muted">{escape(_text(request, "page.dashboard.sources"))}</div><div class="metric">{counts['sources']}</div></div>
@@ -423,10 +488,11 @@ async def dashboard(request: Request, message: str | None = None) -> HTMLRespons
         <div style="margin-top:10px;"><strong>{escape(_text(request, "page.dashboard.label.providers"))}:</strong> {escape(str(system_status.get('provider_label') or _text(request, 'page.dashboard.fallback.provider_status')))}</div>
         <div><strong>{escape(_text(request, "page.dashboard.label.knowledge"))}:</strong> {escape(str(system_status.get('knowledge_label') or _text(request, 'page.dashboard.fallback.knowledge_status')))}</div>
       </section>
+      {quick_actions_html}
       <section class="card">
         <h2>{escape(_text(request, "page.dashboard.recent_documents"))}</h2>
         <table>
-          <thead><tr><th>{escape(_text(request, "page.dashboard.col.title"))}</th><th>{escape(_text(request, "page.dashboard.col.source"))}</th><th>{escape(_text(request, "page.dashboard.col.status"))}</th><th>{escape(_text(request, "page.dashboard.col.published"))}</th><th>{escape(_text(request, "page.dashboard.col.created"))}</th><th>{escape(_text(request, "page.dashboard.col.summary"))}</th></tr></thead>
+          <thead><tr><th>{escape(_text(request, "page.dashboard.col.title"))}</th><th>{escape(_text(request, "page.dashboard.col.source"))}</th><th>{escape(_text(request, "page.dashboard.col.status"))}</th><th>{escape(_text(request, "page.dashboard.col.time"))}</th><th>{escape(_text(request, "page.dashboard.col.summary"))}</th><th>{escape(_text(request, "page.dashboard.col.signals"))}</th></tr></thead>
           <tbody>{docs_html}</tbody>
         </table>
       </section>
@@ -448,15 +514,13 @@ async def sources_page(request: Request, message: str | None = None) -> HTMLResp
     sources, error = service.list_source_page_views()
     rows = "".join(
         f"<tr>"
-        f"<td><a href='/web/sources/{escape(str(source['id']))}'>{escape(str(source['name']))}</a></td>"
-        f"<td>{escape(str(source['source_type']))}</td>"
+        f"<td><a href='/web/sources/{escape(str(source['id']))}'><strong>{escape(str(source['name']))}</strong></a>"
+        f"<div class='muted'>{escape(_text(request, 'page.sources.label.notes'))}: {escape(str(source.get('notes') or '-'))}</div></td>"
+        f"<td><span class='chip'>{escape(str(source['source_type']))}</span></td>"
         f"<td>{escape(str(source['url']))}</td>"
-        f"<td>{escape(str(source['credibility_level']))}</td>"
-        f"<td>{escape(str(source['fetch_strategy']))}</td>"
-        f"<td>{escape(str(source['activity_label']))}</td>"
-        f"<td>{escape(str(source['maintenance_status']))}</td>"
-        f"<td>{escape(str(source['last_import_at']))}</td>"
-        f"<td>{escape(str(source['last_result']))}</td>"
+        f"<td><span class='chip'>{escape(str(source['credibility_level']))}</span></td>"
+        f"<td><span class='chip'>{escape(str(source['activity_label']))}</span></td>"
+        f"<td>{_render_source_metadata(request, source)}</td>"
         f"<td>"
         f"<a class='nav-link' href='/web/sources/{escape(str(source['id']))}'>{escape(_text(request, 'page.sources.action.edit'))}</a> "
         f"<form class='inline' method='post' action='/web/sources/{escape(str(source['id']))}/toggle'><button>{escape(_text(request, 'page.sources.action.toggle'))}</button></form> "
@@ -464,7 +528,7 @@ async def sources_page(request: Request, message: str | None = None) -> HTMLResp
         f"</td>"
         f"</tr>"
         for source in sources
-    ) or _empty_table_row(_text(request, "shared.no_sources"), colspan=10)
+    ) or _empty_table_row(_text(request, "page.sources.empty"), colspan=7)
     error_html = _render_database_note(request, error)
     source_type_options = "".join(
         f"<option value='{escape(value)}'>{escape(value)}</option>" for value in service.list_source_type_values()
@@ -498,7 +562,7 @@ async def sources_page(request: Request, message: str | None = None) -> HTMLResp
       <section class="card">
         <h2>{escape(_text(request, "page.sources.registry"))}</h2>
         <table>
-          <thead><tr><th>{escape(_text(request, 'page.sources.col.name'))}</th><th>{escape(_text(request, 'page.sources.col.type'))}</th><th>{escape(_text(request, 'page.sources.col.url'))}</th><th>{escape(_text(request, 'page.sources.col.cred'))}</th><th>{escape(_text(request, 'page.sources.col.fetch'))}</th><th>{escape(_text(request, 'page.sources.col.status'))}</th><th>{escape(_text(request, 'page.sources.col.maint'))}</th><th>{escape(_text(request, 'page.sources.col.last_import'))}</th><th>{escape(_text(request, 'page.sources.col.last_result'))}</th><th>{escape(_text(request, 'page.sources.col.actions'))}</th></tr></thead>
+          <thead><tr><th>{escape(_text(request, 'page.sources.col.name'))}</th><th>{escape(_text(request, 'page.sources.col.type'))}</th><th>{escape(_text(request, 'page.sources.col.url'))}</th><th>{escape(_text(request, 'page.sources.col.cred'))}</th><th>{escape(_text(request, 'page.sources.col.status'))}</th><th>{escape(_text(request, 'page.sources.col.web_metadata'))}</th><th>{escape(_text(request, 'page.sources.col.actions'))}</th></tr></thead>
           <tbody>{rows}</tbody>
         </table>
       </section>
@@ -618,11 +682,13 @@ async def documents_page(
         f"<td>{escape(str(doc['source_name']))}</td>"
         f"<td>{escape(str(doc['status']))}</td>"
         f"<td>{escape(str(doc['language']))}</td>"
-        f"<td>{escape(str(doc.get('published_at', '-')))}</td>"
+        f"<td>{escape(_document_time_value(doc))}</td>"
         f"<td>{escape(str(doc['summary_text']))}</td>"
+        f"<td>{_render_document_signal_chips(request, doc)}</td>"
+        f"<td><a href='/web/documents/{escape(str(doc['id']))}'>{escape(_text(request, 'page.documents.detail'))}</a></td>"
         f"</tr>"
         for doc in documents
-    ) or _empty_table_row(empty_message, colspan=6)
+    ) or _empty_table_row(empty_message, colspan=8)
     error_html = _render_database_note(request, error)
     filters_html = f"""
       <section class="card">
@@ -648,7 +714,7 @@ async def documents_page(
       <section class="card">
         <h2>{escape(_text(request, "page.documents.list"))}</h2>
         <table>
-          <thead><tr><th>{escape(_text(request, "page.documents.col.title"))}</th><th>{escape(_text(request, "page.documents.col.source"))}</th><th>{escape(_text(request, "page.documents.col.status"))}</th><th>{escape(_text(request, "page.documents.col.language"))}</th><th>{escape(_text(request, "page.documents.col.published"))}</th><th>{escape(_text(request, "page.documents.col.summary"))}</th></tr></thead>
+          <thead><tr><th>{escape(_text(request, "page.documents.col.title"))}</th><th>{escape(_text(request, "page.documents.col.source"))}</th><th>{escape(_text(request, "page.documents.col.status"))}</th><th>{escape(_text(request, "page.documents.col.language"))}</th><th>{escape(_text(request, "page.documents.col.time"))}</th><th>{escape(_text(request, "page.documents.col.summary"))}</th><th>{escape(_text(request, "page.documents.col.signals"))}</th><th>{escape(_text(request, "page.documents.col.detail"))}</th></tr></thead>
           <tbody>{rows}</tbody>
         </table>
       </section>
@@ -1239,6 +1305,16 @@ async def system_page(request: Request, message: str | None = None) -> HTMLRespo
         f"<tr><td>{escape(item['path'])}</td><td>{escape(item['exists_label'])}</td><td>{item['size_bytes']}</td></tr>"
         for item in status["storage_files"]
     )
+    storage_overview_rows = "".join(
+        f"<tr>"
+        f"<td>{escape(_system_storage_text(request, item.get('area_key')))}</td>"
+        f"<td>{escape(_system_storage_text(request, item.get('primary_key')))}</td>"
+        f"<td>{escape(_system_storage_text(request, item.get('fallback_key')))}</td>"
+        f"<td>{escape(_system_storage_text(request, item.get('detail_key')))}</td>"
+        f"<td>{escape(str(item.get('path') or '-'))}</td>"
+        f"</tr>"
+        for item in status.get("storage_overview", [])
+    ) or f"<tr><td colspan='5'>{escape(_text(request, 'page.system.storage.empty'))}</td></tr>"
     count_rows = "".join(
         f"<tr><td>{escape(item['name'])}</td><td>{item['count']}</td></tr>" for item in status["database_counts"]
     ) or f"<tr><td colspan='2'>{escape(_text(request, 'shared.no_database_counts'))}</td></tr>"
@@ -1247,6 +1323,14 @@ async def system_page(request: Request, message: str | None = None) -> HTMLRespo
     body = f"""
     {note_html}
     <div class="grid cols-2">
+      <section class="card">
+        <h2>{escape(_text(request, "page.system.storage_overview"))}</h2>
+        <div class="muted">{escape(_text(request, "page.system.storage.group.main_knowledge"))} / {escape(_text(request, "page.system.storage.group.web_config"))}</div>
+        <table>
+          <thead><tr><th>{escape(_text(request, "page.system.col.area"))}</th><th>{escape(_text(request, "page.system.col.primary"))}</th><th>{escape(_text(request, "page.system.col.fallback"))}</th><th>{escape(_text(request, "page.system.col.detail"))}</th><th>{escape(_text(request, "page.system.col.path"))}</th></tr></thead>
+          <tbody>{storage_overview_rows}</tbody>
+        </table>
+      </section>
       <section class="card stack">
         <h2>{escape(_text(request, "page.system.checks"))}</h2>
         {checks_html}

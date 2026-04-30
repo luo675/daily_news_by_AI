@@ -285,3 +285,29 @@ What this means in practice:
 - the next Web task should be a new focused page-quality task, not another default localization cleanup pass
 
 For the latest handoff status and the most reasonable next-session starting point, always prefer [ARCH_CONTEXT.md](./ARCH_CONTEXT.md).
+
+## Latest Status Update (2026-04-30)
+
+This section supplements the older update above.
+
+- Documents / Knowledge page scanability optimization is complete.
+- Dashboard information-density optimization is complete and `/web/dashboard` is now a stronger daily Web MVP entry page.
+- System / Storage overview is complete and now distinguishes:
+  - main knowledge storage: `PostgreSQL + pgvector`
+  - Ask history: `DB-first + JSON fallback`
+  - AI provider config: `DB-first + JSON fallback`
+  - `Source.config["_web"]`: retained, not a migration target
+- Sources scanability / maintenance metadata display is complete; the page now shows source name, notes, type, URL, credibility, `enabled` / `disabled`, Web maintenance metadata, and existing actions while preserving extra `_web` metadata on edit/import write-back.
+- `risk_count=0` remains the conservative display when no document-level risk association exists.
+- Current verification for this page-quality round was `pytest -q` with `111 passed`.
+
+Do not reopen these as default next tasks:
+
+- Documents signals/detail-column optimization
+- Dashboard quick actions/signals optimization
+- System storage overview
+- Sources scanability / maintenance metadata display
+
+The next Web product task should be a new small page-quality task, such as Watchlist page scanability optimization or a small Review page efficiency improvement, rather than reworking Documents / Dashboard / System / Sources.
+
+For the latest handoff status and the most reasonable next-session starting point, always prefer [ARCH_CONTEXT.md](./ARCH_CONTEXT.md).
