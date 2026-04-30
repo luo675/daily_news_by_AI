@@ -1443,3 +1443,67 @@ Good candidates include:
 - Review page efficiency small improvement
 
 Do not restart Documents, Dashboard, System, or Sources information-density work unless a concrete regression is reported.
+
+## 14. Latest Progress Addendum (2026-04-30 Watchlist scanability pass)
+
+This addendum overrides older notes that still list Watchlist page scanability as the default next Web task.
+
+### Completed in this round
+
+- Watchlist page scanability optimization is complete.
+- `/web/watchlist` now consumes a service-level page-view contract instead of reading `WatchlistItem` ORM attributes directly in the route.
+- `docs/web_page_contract.md` now includes a Watchlist Contract covering:
+  - returned fields
+  - empty state
+  - database degradation note
+  - related-document display boundary
+  - explicit non-goals
+- `WebMvpService.list_watchlist_page_views()` now provides the page data for the Watchlist route.
+- The Watchlist page now surfaces:
+  - watchlist value
+  - item type
+  - priority
+  - status
+  - group
+  - notes
+  - linked entity
+  - updated / created time
+  - top related documents
+  - existing status actions
+- Related documents remain bounded to the existing `list_watchlist_hits()` text-match behavior and top-3 display.
+- Watchlist shell copy is covered in both default `zh` and explicit `?lang=en` modes.
+- Current verification for this Web page-quality round was:
+  - `pytest tests/test_web_mvp_acceptance.py tests/test_web_i18n.py -q`
+  - `15 passed`
+  - `pytest -q`
+  - `115 passed`
+
+### Important boundary that remains
+
+- Do not describe this as advanced RAG, vector retrieval, or complex entity matching.
+- Do not expand Watchlist into automatic source discovery, crawling, or source registry management.
+- Do not translate watchlist values, notes, document titles, summaries, evidence, or other knowledge content.
+- Do not modify `src/domain/*`, `src/application/*`, or `src/processing/*` for this completed page-quality pass.
+- `list_watchlist_hits()` remains a simple text-match related-document helper unless a separate retrieval-quality task is explicitly opened.
+
+### Do not reopen by default
+
+The following Web page-quality tasks are now complete and should not be picked as default next steps:
+
+- Documents signals/detail-column optimization
+- Dashboard quick actions/signals optimization
+- System storage overview
+- Sources scanability / maintenance metadata display
+- Watchlist scanability / related-document presentation
+
+### Updated next-session starting point
+
+If the next session is Web/product iteration, pick a new small page-quality or workflow-efficiency task on top of the stable baseline.
+
+Good candidates include:
+
+- Review page efficiency small improvement
+- a narrowly scoped real integration or browser automation check if stronger confidence is needed
+- documentation cleanup for a newly discovered page-contract gap
+
+Do not restart Documents, Dashboard, System, Sources, or Watchlist information-density work unless a concrete regression is reported.

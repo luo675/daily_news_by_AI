@@ -9,6 +9,7 @@ This note records the current page-layer contract for the server-rendered Web MV
 - `GET /web/documents/{document_id}`
 - `GET /web/sources`
 - `GET /web/sources/{source_id}`
+- `GET /web/watchlist`
 - `GET /web/review`
 - `GET /web/ask`
 - `POST /web/ask` result view
@@ -267,6 +268,71 @@ Sources terminology:
 - `Last import`
 - `Last result`
 - `Web metadata`
+
+## Watchlist Contract
+
+`WebMvpService.list_watchlist_page_views()` returns list items with:
+
+- `id`
+- `item_value`
+- `item_type`
+- `priority_level`
+- `status`
+- `group_name`
+- `notes`
+- `linked_entity`
+- `updated_at`
+- `created_at`
+- `related_documents`
+  - top 3 related documents only
+  - each related document contains:
+    - `id`
+    - `title`
+    - `source_name`
+    - `published_at`
+    - `created_at`
+
+Downgrade rules:
+
+- blank `item_value`, `item_type`, `priority_level`, `status`, `group_name`, `notes`, `updated_at`, or `created_at` -> `-`
+- linked entity relation missing -> `-`
+- linked entity relation present but unnamed -> `Unnamed entity`
+- related document title missing -> `Untitled document`
+- related document source/time missing -> `-`
+- empty related documents -> `[]`, rendered as `No related documents yet.`
+- empty watchlist -> `[]`, rendered as `No watchlist items yet.`
+- DB read failure -> empty list plus the shared database-note wording; the route must not raise 500
+
+Watchlist rendering rules:
+
+- `/web/watchlist` reads from `list_watchlist_page_views()`, not ORM attributes
+- visible item cards show:
+  - item value
+  - type
+  - priority
+  - status
+  - group
+  - notes
+  - linked entity fallback
+  - updated/created timestamps
+  - related documents top 3
+- shell copy is localized through `src/web/i18n.py`
+- user-entered item values, notes, group names, linked entity names, and document titles are not translated
+- existing create and status-update POST semantics stay unchanged
+
+Watchlist terminology:
+
+- `Watchlist`
+- `Add Watchlist Item`
+- `Related Documents`
+- `Linked entity`
+
+Current non-goals:
+
+- no domain model change
+- no new matching, crawling, discovery, RAG, vector search, or entity-resolution behavior
+- no changes to Ask/Review override semantics
+- no broad quality pass for Dashboard, Documents, System, or Sources
 
 ## Review Contract
 

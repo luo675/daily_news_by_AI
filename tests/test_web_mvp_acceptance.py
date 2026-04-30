@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
 
 from src.api.app import create_app
 from src.api.routes import web as web_routes
 from src.domain.enums import PriorityLevel, WatchlistStatus
-from src.domain.models import Document, DocumentSummary, WatchlistItem
+from src.domain.models import Document, DocumentSummary, Entity, WatchlistItem
 from src.web.service import ProviderConfig, SummaryReviewView
 
 
@@ -133,15 +134,92 @@ def _provider_config() -> ProviderConfig:
     )
 
 
-def _watchlist_item() -> WatchlistItem:
-    return WatchlistItem(
+def _watchlist_page_item() -> dict[str, object]:
+    return {
+        "id": str(uuid.uuid4()),
+        "item_value": "OpenAI",
+        "item_type": "company",
+        "priority_level": PriorityLevel.HIGH.value,
+        "status": WatchlistStatus.ACTIVE.value,
+        "group_name": "AI Labs",
+        "notes": "Track model releases.",
+        "linked_entity": "OpenAI (company)",
+        "updated_at": "2026-04-29 08:00:00+00:00",
+        "created_at": "2026-04-28 08:00:00+00:00",
+        "related_documents": [
+            {
+                "id": str(uuid.uuid4()),
+                "title": "GPT-5 launch notes",
+                "source_name": "Example Source",
+                "published_at": "2026-04-29 07:00:00+00:00",
+                "created_at": "2026-04-29 08:00:00+00:00",
+            }
+        ],
+    }
+
+
+def test_web_mvp_service_returns_watchlist_page_view_contract(monkeypatch) -> None:
+    service = web_routes.WebMvpService()
+    item = WatchlistItem(
         id=uuid.uuid4(),
         item_type="company",
         item_value="OpenAI",
-        priority_level=PriorityLevel.HIGH,
-        status=WatchlistStatus.ACTIVE,
+        priority_level=PriorityLevel.HIGH.value,
+        status=WatchlistStatus.ACTIVE.value,
+        group_name="AI Labs",
         notes="Track model releases.",
+        entity=Entity(id=uuid.uuid4(), entity_type="company", name=""),
+        created_at=datetime(2026, 4, 28, 8, 0, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 4, 29, 8, 0, tzinfo=timezone.utc),
     )
+    documents = [
+        Document(id=uuid.uuid4(), title=f"Related document {index}", content_text="OpenAI")
+        for index in range(4)
+    ]
+
+    monkeypatch.setattr(service, "list_watchlist_items", lambda: ([item], None))
+    monkeypatch.setattr(service, "list_watchlist_hits", lambda item_value: documents)
+
+    views, error = service.list_watchlist_page_views()
+
+    assert error is None
+    assert views == [
+        {
+            "id": str(item.id),
+            "item_value": "OpenAI",
+            "item_type": "company",
+            "priority_level": "high",
+            "status": "active",
+            "group_name": "AI Labs",
+            "notes": "Track model releases.",
+            "linked_entity": "Unnamed entity",
+            "updated_at": "2026-04-29 08:00:00+00:00",
+            "created_at": "2026-04-28 08:00:00+00:00",
+            "related_documents": [
+                {
+                    "id": str(documents[0].id),
+                    "title": "Related document 0",
+                    "source_name": "-",
+                    "published_at": "-",
+                    "created_at": "-",
+                },
+                {
+                    "id": str(documents[1].id),
+                    "title": "Related document 1",
+                    "source_name": "-",
+                    "published_at": "-",
+                    "created_at": "-",
+                },
+                {
+                    "id": str(documents[2].id),
+                    "title": "Related document 2",
+                    "source_name": "-",
+                    "published_at": "-",
+                    "created_at": "-",
+                },
+            ],
+        }
+    ]
 
 
 def test_web_mvp_route_level_read_smoke(monkeypatch) -> None:
@@ -318,8 +396,7 @@ def test_web_mvp_lang_query_renders_english_shell_for_sources_and_review(monkeyp
 
 
 def test_web_mvp_lang_query_renders_english_shell_for_watchlist_ai_settings_and_system(monkeypatch) -> None:
-    monkeypatch.setattr(web_routes.service, "list_watchlist_items", lambda: ([_watchlist_item()], None))
-    monkeypatch.setattr(web_routes.service, "list_watchlist_hits", lambda item_value: [])
+    monkeypatch.setattr(web_routes.service, "list_watchlist_page_views", lambda: ([_watchlist_page_item()], None))
     monkeypatch.setattr(web_routes.service, "list_watchlist_type_values", lambda: ["company", "product"])
     monkeypatch.setattr(web_routes.service, "list_priority_values", lambda: ["high", "medium", "low"])
     monkeypatch.setattr(web_routes.service, "list_ai_providers", lambda: [_provider_config()])
@@ -334,7 +411,17 @@ def test_web_mvp_lang_query_renders_english_shell_for_watchlist_ai_settings_and_
     assert watchlist_response.status_code == 200
     assert "Add Watchlist Item" in watchlist_response.text
     assert "Related Documents" in watchlist_response.text
-    assert "No related documents yet." in watchlist_response.text
+    assert "Type" in watchlist_response.text
+    assert "Priority" in watchlist_response.text
+    assert "Status" in watchlist_response.text
+    assert "Group" in watchlist_response.text
+    assert "Notes" in watchlist_response.text
+    assert "Linked entity" in watchlist_response.text
+    assert "Updated" in watchlist_response.text
+    assert "Created" in watchlist_response.text
+    assert "AI Labs" in watchlist_response.text
+    assert "Track model releases." in watchlist_response.text
+    assert "GPT-5 launch notes" in watchlist_response.text
 
     assert ai_settings_response.status_code == 200
     assert "Save Provider" in ai_settings_response.text
@@ -349,7 +436,7 @@ def test_web_mvp_lang_query_renders_english_shell_for_watchlist_ai_settings_and_
 
 
 def test_web_mvp_default_language_renders_chinese_shell_for_watchlist_ai_settings_and_system(monkeypatch) -> None:
-    monkeypatch.setattr(web_routes.service, "list_watchlist_items", lambda: ([], None))
+    monkeypatch.setattr(web_routes.service, "list_watchlist_page_views", lambda: ([], None))
     monkeypatch.setattr(web_routes.service, "list_watchlist_type_values", lambda: ["company", "product"])
     monkeypatch.setattr(web_routes.service, "list_priority_values", lambda: ["high", "medium", "low"])
     monkeypatch.setattr(web_routes.service, "list_ai_providers", lambda: [])
@@ -375,3 +462,17 @@ def test_web_mvp_default_language_renders_chinese_shell_for_watchlist_ai_setting
     assert "系统检查" in system_response.text
     assert "路径" in system_response.text
     assert "Path" not in system_response.text
+
+
+def test_web_watchlist_renders_shared_database_note_when_db_unavailable(monkeypatch) -> None:
+    monkeypatch.setattr(web_routes.service, "list_watchlist_page_views", lambda: ([], "Database session unavailable."))
+    monkeypatch.setattr(web_routes.service, "list_watchlist_type_values", lambda: ["company", "product"])
+    monkeypatch.setattr(web_routes.service, "list_priority_values", lambda: ["high", "medium", "low"])
+
+    client = TestClient(create_app())
+    response = client.get("/web/watchlist?lang=en")
+
+    assert response.status_code == 200
+    assert "Database note" in response.text
+    assert "Some page data is unavailable." in response.text
+    assert "No watchlist items yet." in response.text

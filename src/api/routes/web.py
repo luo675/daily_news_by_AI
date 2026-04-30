@@ -1011,7 +1011,7 @@ async def save_uncertainty_review(brief_id: str, route_id: str, request: Request
 
 @router.get("/web/watchlist")
 async def watchlist_page(request: Request, message: str | None = None) -> HTMLResponse:
-    items, error = service.list_watchlist_items()
+    items, error = service.list_watchlist_page_views()
     type_options = "".join(
         f"<option value='{escape(value)}'>{escape(value)}</option>"
         for value in service.list_watchlist_type_values()
@@ -1022,22 +1022,37 @@ async def watchlist_page(request: Request, message: str | None = None) -> HTMLRe
     )
     rows = []
     for item in items:
-        hits = service.list_watchlist_hits(item.item_value)[:3]
-        hits_html = "".join(
-            f"<li><a href='/web/documents/{doc.id}'>{escape(doc.title)}</a></li>" for doc in hits
+        related_documents = item.get("related_documents") if isinstance(item.get("related_documents"), list) else []
+        related_html = "".join(
+            f"<li><a href='/web/documents/{escape(str(doc.get('id', '')))}'>{escape(str(doc.get('title', '-')))}</a>"
+            f"<div class='muted'>{escape(_text(request, 'page.watchlist.field.source'))}: {escape(str(doc.get('source_name', '-')))}"
+            f" / {escape(_text(request, 'page.watchlist.field.time'))}: {escape(str(doc.get('published_at') or doc.get('created_at') or '-'))}</div></li>"
+            for doc in related_documents
         ) or _empty_list_item(_text(request, "page.watchlist.no_related_documents"))
+        detail_html = _render_text_rows(
+            [
+                (_text(request, "page.watchlist.field.type"), item.get("item_type")),
+                (_text(request, "page.watchlist.field.priority"), item.get("priority_level")),
+                (_text(request, "page.watchlist.field.status"), item.get("status")),
+                (_text(request, "page.watchlist.field.group"), item.get("group_name")),
+                (_text(request, "page.watchlist.field.notes"), item.get("notes")),
+                (_text(request, "page.watchlist.field.linked_entity"), item.get("linked_entity")),
+                (_text(request, "page.watchlist.field.updated"), item.get("updated_at")),
+                (_text(request, "page.watchlist.field.created"), item.get("created_at")),
+            ]
+        )
+        item_id = escape(str(item.get("id", "")))
         rows.append(
             f"""
             <section class="card">
-              <h2>{escape(item.item_value)}</h2>
-              <div class="muted">{escape(item.item_type)} / {escape(item.priority_level)} / {escape(item.status)}</div>
-              <div>{escape(item.notes or '')}</div>
+              <h2>{escape(str(item.get("item_value", "-")))}</h2>
+              <div class="stack">{detail_html}</div>
               <h3>{escape(_text(request, "page.watchlist.related_documents"))}</h3>
-              <ul>{hits_html}</ul>
+              <ul>{related_html}</ul>
               <div class="inline">
-                <form class='inline' method='post' action='/web/watchlist/{item.id}/status'><input type='hidden' name='status' value='active'><button>{escape(_text(request, "page.watchlist.action.active"))}</button></form>
-                <form class='inline' method='post' action='/web/watchlist/{item.id}/status'><input type='hidden' name='status' value='paused'><button>{escape(_text(request, "page.watchlist.action.pause"))}</button></form>
-                <form class='inline' method='post' action='/web/watchlist/{item.id}/status'><input type='hidden' name='status' value='removed'><button>{escape(_text(request, "page.watchlist.action.remove"))}</button></form>
+                <form class='inline' method='post' action='/web/watchlist/{item_id}/status'><input type='hidden' name='status' value='active'><button>{escape(_text(request, "page.watchlist.action.active"))}</button></form>
+                <form class='inline' method='post' action='/web/watchlist/{item_id}/status'><input type='hidden' name='status' value='paused'><button>{escape(_text(request, "page.watchlist.action.pause"))}</button></form>
+                <form class='inline' method='post' action='/web/watchlist/{item_id}/status'><input type='hidden' name='status' value='removed'><button>{escape(_text(request, "page.watchlist.action.remove"))}</button></form>
               </div>
             </section>
             """

@@ -875,6 +875,10 @@ class WebMvpService:
             empty=[],
         )
 
+    def list_watchlist_page_views(self) -> tuple[list[dict[str, Any]], str | None]:
+        items, error = self.list_watchlist_items()
+        return [self._build_watchlist_page_view(item) for item in items], error
+
     def create_watchlist_item(self, form: dict[str, str]) -> str:
         session = self._require_session()
         try:
@@ -2626,6 +2630,34 @@ class WebMvpService:
             "last_result": self._coalesce_text(source_view.last_result),
             "web_metadata": web_metadata,
             "raw_config_json": source_view.raw_config_json,
+        }
+
+    def _build_watchlist_page_view(self, item: WatchlistItem) -> dict[str, Any]:
+        related_documents = [
+            self._build_watchlist_related_document_view(document)
+            for document in self.list_watchlist_hits(str(item.item_value or ""))[:3]
+        ]
+        return {
+            "id": str(item.id),
+            "item_value": self._coalesce_text(item.item_value),
+            "item_type": self._coalesce_text(item.item_type),
+            "priority_level": self._coalesce_text(item.priority_level),
+            "status": self._coalesce_text(item.status),
+            "group_name": self._coalesce_text(item.group_name),
+            "notes": self._coalesce_text(item.notes),
+            "linked_entity": self._build_entity_label(item.entity) if item.entity is not None else "-",
+            "updated_at": self._coalesce_text(str(item.updated_at) if item.updated_at else None),
+            "created_at": self._coalesce_text(str(item.created_at) if item.created_at else None),
+            "related_documents": related_documents,
+        }
+
+    def _build_watchlist_related_document_view(self, document: Document) -> dict[str, Any]:
+        return {
+            "id": str(document.id),
+            "title": self._coalesce_text(document.title, default="Untitled document"),
+            "source_name": self._coalesce_text(document.source.name if document.source else None),
+            "published_at": self._coalesce_text(str(document.published_at) if document.published_at else None),
+            "created_at": self._coalesce_text(str(document.created_at) if document.created_at else None),
         }
 
     def _get_source_web_metadata(self, source: Source) -> dict[str, Any]:

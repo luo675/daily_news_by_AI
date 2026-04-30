@@ -298,8 +298,11 @@ This section supplements the older update above.
   - AI provider config: `DB-first + JSON fallback`
   - `Source.config["_web"]`: retained, not a migration target
 - Sources scanability / maintenance metadata display is complete; the page now shows source name, notes, type, URL, credibility, `enabled` / `disabled`, Web maintenance metadata, and existing actions while preserving extra `_web` metadata on edit/import write-back.
+- Watchlist scanability / related-document presentation is complete; `/web/watchlist` now uses a service page-view contract and shows value, type, priority, status, group, notes, linked entity, updated/created time, related documents, and existing status actions.
 - `risk_count=0` remains the conservative display when no document-level risk association exists.
-- Current verification for this page-quality round was `pytest -q` with `111 passed`.
+- Current verification for the latest page-quality round was:
+  - `pytest tests/test_web_mvp_acceptance.py tests/test_web_i18n.py -q` with `15 passed`
+  - `pytest -q` with `115 passed`
 
 Do not reopen these as default next tasks:
 
@@ -307,7 +310,10 @@ Do not reopen these as default next tasks:
 - Dashboard quick actions/signals optimization
 - System storage overview
 - Sources scanability / maintenance metadata display
+- Watchlist scanability / related-document presentation
 
-The next Web product task should be a new small page-quality task, such as Watchlist page scanability optimization or a small Review page efficiency improvement, rather than reworking Documents / Dashboard / System / Sources.
+The next Web product task should be a new small page-quality or workflow-efficiency task, such as a small Review page efficiency improvement, rather than reworking Documents / Dashboard / System / Sources / Watchlist.
+
+Watchlist related documents still use the existing lightweight text-match helper. This was not an advanced RAG, vector retrieval, crawler, source-discovery, or entity-matching expansion.
 
 For the latest handoff status and the most reasonable next-session starting point, always prefer [ARCH_CONTEXT.md](./ARCH_CONTEXT.md).

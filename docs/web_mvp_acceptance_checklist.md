@@ -2,13 +2,14 @@
 
 Date of latest pass:
 
-- `2026-04-29`
+- `2026-04-30`
 
 Scope:
 
 - Dashboard
 - Documents list/detail
 - Sources list/detail/actions
+- Watchlist list/create/status
 - Review list/save
 - Ask page/result
 - System / Storage
@@ -22,6 +23,7 @@ It does not represent real browser automation, real database integration, or tru
 Run:
 
 ```bash
+pytest tests/test_web_mvp_acceptance.py tests/test_web_i18n.py -q
 pytest tests/test_web_mvp_acceptance.py tests/test_web_ask.py tests/test_web_review_opportunities.py tests/test_web_dashboard_documents.py -q
 ```
 
@@ -52,6 +54,16 @@ pytest tests/test_web_mvp_acceptance.py tests/test_web_ask.py tests/test_web_rev
 - [x] edit form renders without writing display fallback values into inputs
 - [x] toggle action redirects to the expected Sources target
 - [x] import action redirects to the expected Sources target
+
+### Watchlist
+
+- [x] `/web/watchlist` renders
+- [x] watchlist list page uses page-view contract
+- [x] item cards show type, priority, status, group, notes, linked entity, timestamps, and related documents
+- [x] empty watchlist state is stable
+- [x] database degradation shows the shared database note
+- [x] English shell copy renders with `?lang=en`
+- [x] create and status-update routes keep existing redirect semantics
 
 ### Review
 
