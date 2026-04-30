@@ -271,6 +271,9 @@ This section supplements the older update above.
 - `/web/review` and `/web/ask` now share more consistent page-level wording and empty-state semantics.
 - Web MVP route-level smoke acceptance is now calibrated and repeatable.
 - The current smoke suite is explicitly route-level and service-mocked, not real browser or live DB integration.
+- The first-pass Web page-layer bilingual baseline has now been implemented; see `docs/web_i18n_task.md`.
+- The Web page-layer bilingual shell-copy baseline has been completed across the current MVP pages.
+- Default Web UI language is `zh`; explicit `?lang=en` and cookie fallback are supported.
 
 What this means in practice:
 
@@ -278,5 +281,7 @@ What this means in practice:
 - Web MVP display semantics have been further unified
 - page-contract and acceptance documentation are now consolidated
 - Ask display cleanup and Review / Ask wording cleanup should not be reopened as default next tasks
+- page-layer bilingual switching is established for shell copy, but knowledge content is not auto-translated
+- the next Web task should be a new focused page-quality task, not another default localization cleanup pass
 
 For the latest handoff status and the most reasonable next-session starting point, always prefer [ARCH_CONTEXT.md](./ARCH_CONTEXT.md).

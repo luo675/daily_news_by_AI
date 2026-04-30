@@ -6,8 +6,9 @@ from fastapi.testclient import TestClient
 
 from src.api.app import create_app
 from src.api.routes import web as web_routes
-from src.domain.models import Document, DocumentSummary
-from src.web.service import SummaryReviewView
+from src.domain.enums import PriorityLevel, WatchlistStatus
+from src.domain.models import Document, DocumentSummary, WatchlistItem
+from src.web.service import ProviderConfig, SummaryReviewView
 
 
 def _dashboard_payload() -> dict[str, object]:
@@ -114,6 +115,35 @@ def _system_payload() -> dict[str, object]:
     }
 
 
+def _provider_config() -> ProviderConfig:
+    return ProviderConfig(
+        id="provider-1",
+        name="Local QA Provider",
+        provider_type="openai_compatible",
+        base_url="https://example.com",
+        model="test-model",
+        api_key="secret-key",
+        is_enabled=True,
+        is_default=True,
+        supported_tasks=["qa"],
+        notes="Keep local evidence bounded.",
+        last_test_status="valid",
+        last_test_message="Connected successfully.",
+        updated_at="2026-04-28T09:30:00+00:00",
+    )
+
+
+def _watchlist_item() -> WatchlistItem:
+    return WatchlistItem(
+        id=uuid.uuid4(),
+        item_type="company",
+        item_value="OpenAI",
+        priority_level=PriorityLevel.HIGH,
+        status=WatchlistStatus.ACTIVE,
+        notes="Track model releases.",
+    )
+
+
 def test_web_mvp_route_level_read_smoke(monkeypatch) -> None:
     document_id = str(uuid.uuid4())
     source_id = str(uuid.uuid4())
@@ -145,36 +175,36 @@ def test_web_mvp_route_level_read_smoke(monkeypatch) -> None:
     system_response = client.get("/web/system")
 
     assert dashboard_response.status_code == 200
-    assert "System Status" in dashboard_response.text
+    assert "系统状态" in dashboard_response.text
     assert "Weekly AI coding tools update" in dashboard_response.text
 
     assert documents_response.status_code == 200
-    assert "Document List" in documents_response.text
-    assert "Filters currently applied" in documents_response.text
+    assert "文档列表" in documents_response.text
+    assert "当前筛选条件" in documents_response.text
     assert "Manual effective summary for AI coding tools." in documents_response.text
 
     assert document_detail_response.status_code == 200
-    assert "Summary EN:" in document_detail_response.text
+    assert "英文摘要：" in document_detail_response.text
     assert "OpenAI (company)" in document_detail_response.text
 
     assert sources_response.status_code == 200
-    assert "Source Registry" in sources_response.text
+    assert "来源目录" in sources_response.text
     assert "ordinary" in sources_response.text
 
     assert source_detail_response.status_code == 200
-    assert "Edit Source" in source_detail_response.text
-    assert "Maintenance status:" in source_detail_response.text
+    assert "编辑来源" in source_detail_response.text
+    assert "维护状态：" in source_detail_response.text
 
     assert review_response.status_code == 200
-    assert "Summary Review" in review_response.text
+    assert "摘要审阅" in review_response.text
     assert "Reviewed summary document" in review_response.text
 
     assert ask_response.status_code == 200
-    assert "Ask from Local Knowledge" in ask_response.text
+    assert "基于本地知识提问" in ask_response.text
 
     assert system_response.status_code == 200
-    assert "System Checks" in system_response.text
-    assert "Storage Files" in system_response.text
+    assert "系统检查" in system_response.text
+    assert "存储文件" in system_response.text
 
 
 def test_web_mvp_route_level_write_smoke(monkeypatch) -> None:
@@ -215,4 +245,133 @@ def test_web_mvp_route_level_write_smoke(monkeypatch) -> None:
     assert import_response.headers["location"].startswith("/web/sources?")
     assert ask_response.status_code == 200
     assert "Bounded answer from local evidence." in ask_response.text
-    assert "Answer" in ask_response.text
+    assert "回答" in ask_response.text
+
+
+def test_web_mvp_lang_query_forces_english_and_persists_cookie(monkeypatch) -> None:
+    monkeypatch.setattr(web_routes.service, "get_dashboard_data", _dashboard_payload)
+
+    client = TestClient(create_app())
+    response = client.get("/web/dashboard?lang=en")
+
+    assert response.status_code == 200
+    assert "System Status" in response.text
+    assert "系统状态" not in response.text
+    assert "daily_news_lang=en" in response.headers.get("set-cookie", "")
+
+
+def test_web_mvp_lang_cookie_is_used_when_query_is_missing(monkeypatch) -> None:
+    monkeypatch.setattr(web_routes.service, "get_dashboard_data", _dashboard_payload)
+
+    client = TestClient(create_app())
+    client.cookies.set("daily_news_lang", "en")
+    response = client.get("/web/dashboard")
+
+    assert response.status_code == 200
+    assert "System Status" in response.text
+    assert "系统状态" not in response.text
+
+
+def test_web_entry_redirect_preserves_explicit_lang_query() -> None:
+    client = TestClient(create_app())
+
+    response = client.get("/web?lang=en", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/web/dashboard?lang=en"
+    assert "daily_news_lang=en" in response.headers.get("set-cookie", "")
+
+
+def test_web_entry_redirect_uses_lang_cookie_fallback_when_query_missing() -> None:
+    client = TestClient(create_app())
+    client.cookies.set("daily_news_lang", "en")
+
+    response = client.get("/web", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/web/dashboard?lang=en"
+
+
+def test_web_mvp_lang_query_renders_english_shell_for_sources_and_review(monkeypatch) -> None:
+    source_id = str(uuid.uuid4())
+    review_item = _review_summary_item()
+
+    monkeypatch.setattr(web_routes.service, "list_source_page_views", lambda: ([_source_page_item(source_id)], None))
+    monkeypatch.setattr(web_routes.service, "list_review_uncertainties", lambda: ([], None))
+    monkeypatch.setattr(web_routes.service, "list_review_risks", lambda: ([], None))
+    monkeypatch.setattr(web_routes.service, "list_review_opportunities", lambda: ([], None))
+    monkeypatch.setattr(web_routes.service, "list_review_documents", lambda: ([review_item], None))
+
+    client = TestClient(create_app())
+    sources_response = client.get("/web/sources?lang=en")
+    review_response = client.get("/web/review?lang=en")
+
+    assert sources_response.status_code == 200
+    assert "Source Registry" in sources_response.text
+    assert "Add Source" in sources_response.text
+    assert "来源目录" not in sources_response.text
+
+    assert review_response.status_code == 200
+    assert "Summary Review" in review_response.text
+    assert "Automatic Result" in review_response.text
+    assert "摘要审阅" not in review_response.text
+
+
+def test_web_mvp_lang_query_renders_english_shell_for_watchlist_ai_settings_and_system(monkeypatch) -> None:
+    monkeypatch.setattr(web_routes.service, "list_watchlist_items", lambda: ([_watchlist_item()], None))
+    monkeypatch.setattr(web_routes.service, "list_watchlist_hits", lambda item_value: [])
+    monkeypatch.setattr(web_routes.service, "list_watchlist_type_values", lambda: ["company", "product"])
+    monkeypatch.setattr(web_routes.service, "list_priority_values", lambda: ["high", "medium", "low"])
+    monkeypatch.setattr(web_routes.service, "list_ai_providers", lambda: [_provider_config()])
+    monkeypatch.setattr(web_routes.service, "list_ai_task_values", lambda: ["summarization", "analysis", "qa"])
+    monkeypatch.setattr(web_routes.service, "get_system_page_data", _system_payload)
+
+    client = TestClient(create_app())
+    watchlist_response = client.get("/web/watchlist?lang=en")
+    ai_settings_response = client.get("/web/ai-settings?lang=en")
+    system_response = client.get("/web/system?lang=en")
+
+    assert watchlist_response.status_code == 200
+    assert "Add Watchlist Item" in watchlist_response.text
+    assert "Related Documents" in watchlist_response.text
+    assert "No related documents yet." in watchlist_response.text
+
+    assert ai_settings_response.status_code == 200
+    assert "Save Provider" in ai_settings_response.text
+    assert "Configured Providers" in ai_settings_response.text
+    assert "Supported tasks" in ai_settings_response.text
+
+    assert system_response.status_code == 200
+    assert "System Checks" in system_response.text
+    assert "Path" in system_response.text
+    assert "Exists" in system_response.text
+    assert "Size (bytes)" in system_response.text
+
+
+def test_web_mvp_default_language_renders_chinese_shell_for_watchlist_ai_settings_and_system(monkeypatch) -> None:
+    monkeypatch.setattr(web_routes.service, "list_watchlist_items", lambda: ([], None))
+    monkeypatch.setattr(web_routes.service, "list_watchlist_type_values", lambda: ["company", "product"])
+    monkeypatch.setattr(web_routes.service, "list_priority_values", lambda: ["high", "medium", "low"])
+    monkeypatch.setattr(web_routes.service, "list_ai_providers", lambda: [])
+    monkeypatch.setattr(web_routes.service, "list_ai_task_values", lambda: ["summarization", "analysis", "qa"])
+    monkeypatch.setattr(web_routes.service, "get_system_page_data", _system_payload)
+
+    client = TestClient(create_app())
+    watchlist_response = client.get("/web/watchlist")
+    ai_settings_response = client.get("/web/ai-settings")
+    system_response = client.get("/web/system")
+
+    assert watchlist_response.status_code == 200
+    assert "新增观察项" in watchlist_response.text
+    assert "暂无观察项。" in watchlist_response.text
+    assert "Add Watchlist Item" not in watchlist_response.text
+
+    assert ai_settings_response.status_code == 200
+    assert "保存服务商" in ai_settings_response.text
+    assert "已配置服务商" in ai_settings_response.text
+    assert "Save Provider" not in ai_settings_response.text
+
+    assert system_response.status_code == 200
+    assert "系统检查" in system_response.text
+    assert "路径" in system_response.text
+    assert "Path" not in system_response.text

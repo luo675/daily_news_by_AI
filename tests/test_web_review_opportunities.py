@@ -644,7 +644,7 @@ def test_review_page_renders_opportunity_review_card(monkeypatch, workspace_tmp_
     response = client.get("/web/review")
 
     assert response.status_code == 200
-    assert "Opportunity Review" in response.text
+    assert "机会审阅" in response.text
     assert "Auto opportunity title" in response.text
     assert "Backing document" in response.text
     assert "action=\"/web/review/opportunities/" in response.text
@@ -700,16 +700,53 @@ def test_review_page_renders_summary_review_card(monkeypatch, workspace_tmp_path
     response = client.get("/web/review")
 
     assert response.status_code == 200
-    assert "Summary Review" in response.text
+    assert "摘要审阅" in response.text
     assert "Reviewed summary document" in response.text
-    assert "Automatic Result" in response.text
-    assert "Effective Values" in response.text
+    assert "自动结果" in response.text
+    assert "生效值" in response.text
     assert "Manual Effective Values" not in response.text
-    assert "Review History" in response.text
+    assert "审阅历史" in response.text
     assert "name=\"reset_summary_zh\"" in response.text
     assert "name=\"reset_summary_en\"" in response.text
     assert "name=\"reset_key_points\"" in response.text
     assert f"action=\"/web/review/{summary.id}\"" in response.text
+
+
+def test_review_page_renders_english_shell_when_lang_query_requests_en(monkeypatch, workspace_tmp_path: Path) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    document = _build_document_with_summary()
+    summary = document.summary
+    assert summary is not None
+    monkeypatch.setattr(web_routes.service, "list_review_uncertainties", lambda: ([], None))
+    monkeypatch.setattr(web_routes.service, "list_review_risks", lambda: ([], None))
+    monkeypatch.setattr(web_routes.service, "list_review_opportunities", lambda: ([], None))
+    monkeypatch.setattr(
+        web_routes.service,
+        "list_review_documents",
+        lambda: (
+            [
+                SummaryReviewView(
+                    document=document,
+                    summary=summary,
+                    auto_values={"summary_zh": "", "summary_en": "Automatic English summary", "key_points": []},
+                    effective_values={"summary_zh": "", "summary_en": "Automatic English summary", "key_points": []},
+                    history=[],
+                )
+            ],
+            None,
+        ),
+    )
+
+    client = TestClient(create_app())
+    response = client.get("/web/review?lang=en")
+
+    assert response.status_code == 200
+    assert "Review" in response.text
+    assert "Summary Review" in response.text
+    assert "Automatic Result" in response.text
+    assert "Effective Values" in response.text
+    assert "Review History" in response.text
+    assert "摘要审阅" not in response.text
 
 
 def test_review_page_submit_includes_explicit_reset_flags(monkeypatch, workspace_tmp_path: Path) -> None:
@@ -993,9 +1030,9 @@ def test_review_page_renders_risk_review_card(monkeypatch, workspace_tmp_path: P
     response = client.get("/web/review")
 
     assert response.status_code == 200
-    assert "Risk Review" in response.text
-    assert "Effective Values" in response.text
-    assert "Review History" in response.text
+    assert "风险审阅" in response.text
+    assert "生效值" in response.text
+    assert "审阅历史" in response.text
     assert "Model provider concentration" in response.text
     assert "name=\"reset_severity\"" in response.text
     assert "name=\"reset_description\"" in response.text
@@ -1435,11 +1472,11 @@ def test_review_page_renders_uncertainty_review_card(monkeypatch, workspace_tmp_
     response = client.get("/web/review")
 
     assert response.status_code == 200
-    assert "Uncertainty Review" in response.text
-    assert "Effective Values" in response.text
-    assert "Review History" in response.text
+    assert "不确定性审阅" in response.text
+    assert "生效值" in response.text
+    assert "审阅历史" in response.text
     assert "Provider lock-in remains unclear." in response.text
-    assert '<option value="__UNCHANGED__" selected>-- keep auto / no manual override --</option>' in response.text
+    assert '<option value="__UNCHANGED__" selected>-- 保持自动值 / 不做人工覆盖 --</option>' in response.text
     assert '<option value="open" selected>' not in response.text
     assert "name=\"reset_uncertainty_note\"" in response.text
     assert "name=\"reset_uncertainty_status\"" in response.text
@@ -1460,7 +1497,7 @@ def test_review_page_renders_empty_state_with_shared_review_language(
     response = client.get("/web/review")
 
     assert response.status_code == 200
-    assert "No review items available." in response.text
+    assert "暂无审阅项。" in response.text
 
 
 def test_review_page_renders_shared_database_note(monkeypatch, workspace_tmp_path: Path) -> None:
@@ -1474,8 +1511,8 @@ def test_review_page_renders_shared_database_note(monkeypatch, workspace_tmp_pat
     response = client.get("/web/review")
 
     assert response.status_code == 200
-    assert "Database note:" in response.text
-    assert "Some page data is unavailable." in response.text
+    assert "数据库提示:" in response.text
+    assert "部分页面数据暂不可用。" in response.text
     assert "Database session unavailable." in response.text
 
 

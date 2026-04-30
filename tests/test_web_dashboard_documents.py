@@ -312,13 +312,46 @@ def test_dashboard_page_renders_recent_summary_and_system_status(monkeypatch, wo
     response = client.get("/web/dashboard")
 
     assert response.status_code == 200
-    assert "System Status" in response.text
-    assert "Database:</strong> available" in response.text
-    assert "Providers:</strong> 1 provider enabled" in response.text
-    assert "Knowledge:</strong> 1 recent document available in the dashboard" in response.text
+    assert "系统状态" in response.text
+    assert "数据库:</strong> available" in response.text
+    assert "服务商:</strong> 1 provider enabled" in response.text
+    assert "知识:</strong> 1 recent document available in the dashboard" in response.text
     assert "Manual effective summary for AI coding tools." in response.text
     assert "processed" in response.text
     assert "2026-04-27 12:00:00+00:00" in response.text
+
+
+def test_dashboard_page_renders_english_shell_when_lang_query_requests_en(monkeypatch, workspace_tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        web_routes.service,
+        "get_dashboard_data",
+        lambda: {
+            "counts": {"sources": 3, "documents": 12, "watchlist": 2, "reviews": 4},
+            "recent_documents": [],
+            "top_topics": [],
+            "providers": [],
+            "qa_history": [],
+            "db_error": None,
+            "system_status": {
+                "database_label": "available",
+                "database_detail": "Counts and recent knowledge changes are available.",
+                "provider_label": "1 provider enabled",
+                "knowledge_label": "1 recent document available in the dashboard",
+            },
+        },
+        raising=False,
+    )
+
+    client = TestClient(create_app())
+    response = client.get("/web/dashboard?lang=en")
+
+    assert response.status_code == 200
+    assert "Dashboard" in response.text
+    assert "System Status" in response.text
+    assert "Recent Documents" in response.text
+    assert "Top Topics" in response.text
+    assert "AI Providers" in response.text
+    assert "控制台" not in response.text
 
 
 def test_dashboard_page_renders_empty_and_db_degraded_states(monkeypatch, workspace_tmp_path: Path) -> None:
@@ -346,14 +379,14 @@ def test_dashboard_page_renders_empty_and_db_degraded_states(monkeypatch, worksp
     response = client.get("/web/dashboard")
 
     assert response.status_code == 200
-    assert "Database note:" in response.text
-    assert "Some page data is unavailable." in response.text
+    assert "数据库提示:" in response.text
+    assert "部分页面数据暂不可用。" in response.text
     assert "Database session unavailable." in response.text
-    assert "Database:</strong> degraded" in response.text
-    assert "No recent documents available." in response.text
-    assert "No topics available." in response.text
-    assert "No providers available." in response.text
-    assert "No recent Q&amp;A available." in response.text
+    assert "数据库:</strong> degraded" in response.text
+    assert "暂无最近文档。" in response.text
+    assert "暂无主题。" in response.text
+    assert "暂无 provider。" in response.text
+    assert "暂无最近问答。" in response.text
 
 
 def test_documents_page_uses_document_view_contract(monkeypatch, workspace_tmp_path: Path) -> None:
@@ -397,10 +430,10 @@ def test_documents_page_uses_document_view_contract(monkeypatch, workspace_tmp_p
     assert "Weekly AI coding tools update" in response.text
     assert "value=\"ai tools\"" in response.text
     assert f"value='{source_id}' selected" in response.text
-    assert "Filters currently applied" in response.text
-    assert "Status" in response.text
-    assert "Language" in response.text
-    assert "Published" in response.text
+    assert "当前筛选条件" in response.text
+    assert "状态" in response.text
+    assert "语言" in response.text
+    assert "发布时间" in response.text
     assert "processed" in response.text
     assert "en" in response.text
     assert "2026-04-27 12:00:00+00:00" in response.text
@@ -419,10 +452,10 @@ def test_documents_page_renders_empty_state_with_current_filters(monkeypatch, wo
     response = client.get(f"/web/documents?q=missing&source_id={source_id}")
 
     assert response.status_code == 200
-    assert "Filters currently applied" in response.text
+    assert "当前筛选条件" in response.text
     assert "missing" in response.text
     assert "Example Source" in response.text
-    assert "No documents matched the current filters." in response.text
+    assert "当前筛选条件下无匹配文档。" in response.text
 
 
 def test_documents_page_renders_unknown_source_filter_when_source_id_is_unmatched(
@@ -437,11 +470,11 @@ def test_documents_page_renders_unknown_source_filter_when_source_id_is_unmatche
     response = client.get(f"/web/documents?q=missing&source_id={source_id}")
 
     assert response.status_code == 200
-    assert "Filters currently applied" in response.text
+    assert "当前筛选条件" in response.text
     assert "missing" in response.text
-    assert "Unknown source filter" in response.text
-    assert "All sources" not in response.text.split("Filters currently applied", 1)[1]
-    assert "No documents matched the current filters." in response.text
+    assert "未知来源筛选" in response.text
+    assert "全部来源" not in response.text.split("当前筛选条件", 1)[1]
+    assert "当前筛选条件下无匹配文档。" in response.text
 
 
 def test_documents_page_renders_stable_missing_field_fallbacks(monkeypatch, workspace_tmp_path: Path) -> None:
@@ -483,10 +516,10 @@ def test_documents_page_renders_empty_state_without_filters(monkeypatch, workspa
     response = client.get("/web/documents")
 
     assert response.status_code == 200
-    assert "Filters currently applied" in response.text
-    assert "Query:</strong> None" in response.text
-    assert "Source:</strong> All sources" in response.text
-    assert "No documents available." in response.text
+    assert "当前筛选条件" in response.text
+    assert "查询:</strong> 无" in response.text
+    assert "来源:</strong> 全部来源" in response.text
+    assert "暂无文档。" in response.text
 
 
 def test_document_detail_uses_document_view_contract(monkeypatch, workspace_tmp_path: Path) -> None:
@@ -565,8 +598,8 @@ def test_document_detail_renders_empty_entity_and_topic_states(monkeypatch, work
     response = client.get(f"/web/documents/{document_id}")
 
     assert response.status_code == 200
-    assert "No entities." in response.text
-    assert "No topics." in response.text
+    assert "暂无实体。" in response.text
+    assert "暂无主题。" in response.text
     assert "Unnamed entity" not in response.text
     assert "Unnamed topic" not in response.text
 
@@ -657,12 +690,51 @@ def test_sources_page_uses_source_page_view_contract(monkeypatch, workspace_tmp_
     response = client.get("/web/sources")
 
     assert response.status_code == 200
-    assert "Source Registry" in response.text
+    assert "来源目录" in response.text
     assert "Example Source" in response.text
     assert "manual_import" in response.text
     assert "ordinary" in response.text
     assert "success" in response.text
     assert "/web/sources/" in response.text
+
+
+def test_sources_page_renders_english_shell_when_lang_query_requests_en(monkeypatch, workspace_tmp_path: Path) -> None:
+    source_id = str(uuid.uuid4())
+    monkeypatch.setattr(
+        web_routes.service,
+        "list_source_page_views",
+        lambda: (
+            [
+                {
+                    "id": source_id,
+                    "name": "Example Source",
+                    "source_type": "manual_import",
+                    "url": "https://example.com/source",
+                    "credibility_level": "B",
+                    "fetch_strategy": "manual",
+                    "is_active": True,
+                    "activity_label": "active",
+                    "maintenance_status": "ordinary",
+                    "notes": "Stable manual source.",
+                    "last_import_at": "2026-04-28T09:30:00+00:00",
+                    "last_result": "success",
+                    "raw_config_json": "{}",
+                }
+            ],
+            None,
+        ),
+        raising=False,
+    )
+
+    client = TestClient(create_app())
+    response = client.get("/web/sources?lang=en")
+
+    assert response.status_code == 200
+    assert "Sources" in response.text
+    assert "Source Registry" in response.text
+    assert "Add Source" in response.text
+    assert "Create Source" in response.text
+    assert "来源目录" not in response.text
 
 
 def test_sources_page_renders_empty_and_db_degraded_states(monkeypatch, workspace_tmp_path: Path) -> None:
@@ -672,10 +744,10 @@ def test_sources_page_renders_empty_and_db_degraded_states(monkeypatch, workspac
     response = client.get("/web/sources")
 
     assert response.status_code == 200
-    assert "Database note:" in response.text
-    assert "Some page data is unavailable." in response.text
+    assert "数据库提示:" in response.text
+    assert "部分页面数据暂不可用。" in response.text
     assert "Database session unavailable." in response.text
-    assert "No sources available." in response.text
+    assert "暂无来源。" in response.text
 
 
 def test_source_detail_uses_source_page_view_contract(monkeypatch, workspace_tmp_path: Path) -> None:
@@ -713,9 +785,10 @@ def test_source_detail_uses_source_page_view_contract(monkeypatch, workspace_tmp
     response = client.get(f"/web/sources/{source_id}")
 
     assert response.status_code == 200
-    assert "Edit Source" in response.text
-    assert "Maintenance status:</strong> formal_seed" in response.text
-    assert "Formal seed baseline status is visible here but not editable" in response.text
+    assert "编辑来源" in response.text
+    assert "维护状态" in response.text
+    assert "formal_seed" in response.text
+    assert "正式种子基线状态可在此查看，但不能通过普通 Web 表单编辑。" in response.text
     assert "Stable manual source." in response.text
     assert "success" in response.text
 
@@ -848,9 +921,9 @@ def test_system_page_uses_system_page_data_contract(monkeypatch, workspace_tmp_p
     response = client.get("/web/system")
 
     assert response.status_code == 200
-    assert "System Checks" in response.text
-    assert "Storage Files" in response.text
-    assert "Database Counts" in response.text
+    assert "系统检查" in response.text
+    assert "存储文件" in response.text
+    assert "数据库计数" in response.text
     assert "Database environment" in response.text
     assert "available" in response.text
     assert "configs/web/ai_settings.json" in response.text
@@ -877,11 +950,11 @@ def test_system_page_renders_empty_and_degraded_states(monkeypatch, workspace_tm
     response = client.get("/web/system")
 
     assert response.status_code == 200
-    assert "Database note:" in response.text
-    assert "Some page data is unavailable." in response.text
+    assert "数据库提示:" in response.text
+    assert "部分页面数据暂不可用。" in response.text
     assert "Database session unavailable." in response.text
-    assert "No database counts available." in response.text
-    assert "No storage files available." in response.text
+    assert "暂无数据库计数。" in response.text
+    assert "暂无存储文件。" in response.text
 
 
 def test_system_page_renders_real_counts_query_error(monkeypatch, workspace_tmp_path: Path) -> None:
@@ -905,6 +978,6 @@ def test_system_page_renders_real_counts_query_error(monkeypatch, workspace_tmp_
     response = client.get("/web/system")
 
     assert response.status_code == 200
-    assert "Database note:" in response.text
-    assert "Some page data is unavailable." in response.text
+    assert "数据库提示:" in response.text
+    assert "部分页面数据暂不可用。" in response.text
     assert "RuntimeError: count query timeout" in response.text

@@ -1203,3 +1203,141 @@ Use this rule instead:
    - treat page contracts and route-level smoke acceptance as already established
    - pick the next highest-value small task on top of the stable baseline
    - if stronger confidence is needed, use a separate real integration or browser automation layer instead of expanding this smoke suite by default
+
+## 10. Historical note: deferred Web task for bilingual UI switching
+
+This section records the earlier point at which bilingual UI switching was still deferred. The current status is defined by Section 11 below.
+
+### Task intent
+
+- Add a stable Chinese / English UI switch for the Web MVP.
+- Keep the scope on page-layer wording and navigation labels first.
+- Do not turn this into a content translation system by default.
+
+### Stable boundary
+
+- UI text should be switchable between `zh` and `en`.
+- Knowledge content should remain source-of-truth text unless a later task explicitly defines translation rules.
+- Do not modify `src/application/*`, `src/domain/*`, or `src/processing/*` for the first pass.
+- Prefer server-rendered page-layer i18n over a heavier frontend rewrite.
+
+### Recommended next-session starting point
+
+If the next session is Web/product iteration, the next reasonable task is:
+
+- implement a page-layer bilingual switch for the Web MVP
+- cover navigation, titles, buttons, empty states, degraded notes, and table headers
+- preserve current page context while switching language
+- keep content translation as a separate follow-up decision
+
+## 11. Latest Progress Addendum (2026-04-30 Web page-layer bilingual baseline)
+
+This addendum overrides older notes that still describe bilingual UI switching as unimplemented or only partially completed.
+
+### Completed in this round
+
+- A lightweight page-layer i18n baseline was implemented and completed for the Web MVP shell copy.
+- New shared page-layer i18n helpers were added in `src/web/i18n.py`.
+- The language rule is now explicitly:
+  - URL `lang` parameter first
+  - persisted cookie fallback
+  - default `zh`
+- Supported language values are currently limited to:
+  - `zh`
+  - `en`
+- The persisted language preference currently uses cookie storage only:
+  - `daily_news_lang`
+- A Web i18n middleware was added in `src/api/app.py` to:
+  - resolve the current page language once per request
+  - inject page-layer i18n context into `request.state`
+  - persist valid `lang` selections back to cookie
+- Shared page layout wiring in `src/api/routes/web.py` now supports:
+  - localized `<html lang=...>`
+  - localized navigation labels
+  - localized shared page subtitle
+  - language switch links that preserve current path and query while overriding `lang`
+- Key Web pages now use the shared page-layer i18n helper for major shell copy:
+  - `Dashboard`
+  - `Documents`
+  - `Document Detail`
+  - `Sources`
+  - `Review`
+  - `Ask`
+  - `Watchlist`
+  - `AI Settings`
+  - `System`
+- `Ask` page shell copy was explicitly completed in this round, including:
+  - form title
+  - placeholder
+  - default provider label
+  - ask button
+  - retrieval note
+  - status / question / answer / run details / error state
+  - evidence / opportunities / risks / uncertainties / related topics / meta
+  - back link
+  - ask metadata labels
+  - ask empty-state wording
+- Ask evidence fallback shell copy is now localized:
+  - untitled evidence fallback
+  - missing snippet fallback
+- `/web` entry redirect now explicitly targets `/web/dashboard?lang=...` and no longer relies on string replacement.
+- Ask result status CSS class is now derived from raw `answer_mode`, not from localized status text.
+- `t(...)` fallback semantics are now explicitly tested:
+  - current language key first
+  - default language key fallback second
+  - identifiable marker fallback last
+- Route-level Web smoke tests and page tests were updated for the new default Chinese shell copy and explicit English query behavior.
+- Current local verification result for this round was:
+  - `pytest -q`
+  - `108 passed`
+
+### Updated stable understanding
+
+At the current stage, the project should now be understood as:
+
+- `content maintenance baseline stable`
+- `Web MVP baseline stable`
+- page-layer bilingual switching baseline is now implemented for Web shell copy
+- default Web UI language is `zh`
+- explicit `?lang=en` switching is supported
+- cookie-based language persistence is supported
+- content translation is still intentionally out of scope
+- `Ask` remains the reference page for the bilingual shell-copy pattern
+- `Watchlist`, `AI Settings`, and `System` shell copy have been brought into the same baseline
+
+### Important boundary that remains
+
+- Do not reinterpret the current work as a full internationalization platform.
+- Do not treat knowledge content, summaries, evidence snippets, review payloads, or source-of-truth domain text as auto-translated.
+- Do not modify `src/application/*`, `src/domain/*`, or `src/processing/*` as part of the first-pass bilingual work unless a separate regression requires it.
+- Do not reopen Ask display cleanup, Ask history DB migration, AI provider config DB migration, or Review/Ask wording cleanup as default next steps.
+- Do not start content translation, locale management, or a heavier frontend/i18n platform without a separate explicit decision.
+
+### Updated next-session starting point
+
+The next session should now start from one of these two paths:
+
+1. If the goal is content maintenance:
+   - continue baseline maintenance
+   - re-check formal seed baseline
+   - continue observing deferred candidates such as `what-openai-did`
+2. If the goal is Web/product iteration:
+   - treat page-layer bilingual infrastructure as already established
+   - do not restart language-resolution design debates
+   - do not reopen Ask page shell-copy wiring or completed shell-copy cleanup as the default task
+   - pick a new small page-quality task on top of the existing stable baseline
+
+### Recommended next Web task
+
+If the next session is Web/product iteration, the most reasonable next task is:
+
+- choose a new focused Web page-quality task rather than continuing localization cleanup by default
+- candidate directions:
+  - improve one page's scanability or density
+  - add a small route-level smoke check only if it protects an existing contract
+  - document a page contract gap before implementation
+- keep evidence bodies, summaries, and other knowledge content un-translated
+- keep route-level smoke acceptance aligned with:
+  - default `zh`
+  - explicit `?lang=en`
+  - cookie fallback behavior

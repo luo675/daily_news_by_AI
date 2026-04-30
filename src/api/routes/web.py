@@ -8,10 +8,23 @@ from urllib.parse import parse_qs, urlencode
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from src.web.i18n import WebI18nContext
 from src.web.service import WebMvpService
 
 router = APIRouter(include_in_schema=False)
 service = WebMvpService()
+
+
+def _i18n(request: Request) -> WebI18nContext:
+    return request.state.web_i18n
+
+
+def _text(request: Request, key: str, default: str | None = None) -> str:
+    return _i18n(request).text(key, default)
+
+
+def _dashboard_redirect_url(request: Request) -> str:
+    return f"/web/dashboard?{urlencode({'lang': _i18n(request).lang})}"
 
 
 async def _read_form(request: Request) -> dict[str, str]:
@@ -109,19 +122,19 @@ def _render_structured_list(items: object, *, empty_message: str) -> str:
     return f"<ul>{''.join(rendered)}</ul>"
 
 
-def _render_meta_section(meta: object) -> str:
+def _render_meta_section(request: Request, meta: object) -> str:
     if not isinstance(meta, dict) or not any(value is not None and str(value).strip() for value in meta.values()):
-        return "<div class='muted'>No metadata available.</div>"
+        return f"<div class='muted'>{escape(_text(request, 'shared.no_metadata'))}</div>"
     return _render_definition_rows([(str(key), value) for key, value in meta.items()])
 
 
-def _render_database_note(detail: str | None) -> str:
+def _render_database_note(request: Request, detail: str | None) -> str:
     text = str(detail or "").strip()
     if not text:
         return ""
     return (
-        "<div class='card'><strong>Database note:</strong> "
-        "Some page data is unavailable. "
+        f"<div class='card'><strong>{escape(_text(request, 'shared.database_note'))}:</strong> "
+        f"{escape(_text(request, 'shared.database_note_detail'))} "
         f"{escape(text)}</div>"
     )
 
@@ -134,18 +147,20 @@ def _empty_list_item(message: str) -> str:
     return f"<li>{escape(message)}</li>"
 
 
-def _format_ask_provider_name(value: object) -> str:
+def _format_ask_provider_name(request: Request, value: object) -> str:
     text = str(value or "").strip()
-    return text or "default/local only"
+    return text or _text(request, "page.ask.provider_default_local_only")
 
 
-def _format_count_label(count: int, singular: str, plural: str | None = None) -> str:
+def _format_count_label(request: Request, count: int, singular: str, plural: str | None = None) -> str:
+    if _i18n(request).lang == "zh":
+        return f"{count} {_text(request, 'shared.count.item_many')}"
     word = singular if count == 1 else (plural or f"{singular}s")
     return f"{count} {word}"
 
 
-def _build_ask_metadata_rows(result: dict[str, object], *, include_status: bool) -> list[tuple[str, object]]:
-    status_label, _ = _build_ask_status(result)
+def _build_ask_metadata_rows(request: Request, result: dict[str, object], *, include_status: bool) -> list[tuple[str, object]]:
+    status_label, _ = _build_ask_status(request, result)
     evidence_items = _coerce_items(result.get("evidence"))
     first_match_basis = ""
     for item in evidence_items:
@@ -155,53 +170,62 @@ def _build_ask_metadata_rows(result: dict[str, object], *, include_status: bool)
 
     rows: list[tuple[str, object]] = []
     if include_status:
-        rows.append(("Status", status_label))
+        rows.append((_text(request, "page.ask.meta.status"), status_label))
     rows.extend(
         [
-            ("Mode", str(result.get("answer_mode") or "local_only")),
-            ("Provider", _format_ask_provider_name(result.get("provider_name"))),
-            ("Created", str(result.get("created_at") or "").strip() or "-"),
-            ("Evidence", _format_count_label(len(evidence_items), "item")),
+            (_text(request, "page.ask.meta.mode"), str(result.get("answer_mode") or "local_only")),
+            (_text(request, "page.ask.meta.provider"), _format_ask_provider_name(request, result.get("provider_name"))),
+            (_text(request, "page.ask.meta.created"), str(result.get("created_at") or "").strip() or "-"),
+            (_text(request, "page.ask.meta.evidence"), _format_count_label(request, len(evidence_items), "item")),
         ]
     )
     if first_match_basis:
-        rows.append(("Match", first_match_basis))
+        rows.append((_text(request, "page.ask.meta.match"), first_match_basis))
     note = str(result.get("note") or "").strip()
     if note:
-        rows.append(("Note", note))
+        rows.append((_text(request, "page.ask.meta.note"), note))
     return rows
 
 
-def _build_ask_status(result: dict[str, object]) -> tuple[str, str]:
+def _build_ask_status(request: Request, result: dict[str, object]) -> tuple[str, str]:
     answer_mode = str(result.get("answer_mode") or "local_only")
     if answer_mode == "insufficient_local_evidence":
-        return "incomplete", "Local evidence was not sufficient for a reliable answer."
+        return _text(request, "page.ask.status.incomplete"), _text(request, "page.ask.status.incomplete_detail")
     if answer_mode == "local_fallback":
-        return "fallback warning", "Showing local answer because the external provider failed."
+        return _text(request, "page.ask.status.fallback_warning"), _text(request, "page.ask.status.fallback_warning_detail")
     if answer_mode == "local_with_external_reasoning":
-        return "bounded external reasoning", "External reasoning stayed constrained to retrieved local evidence."
-    return "local answer", "Answer rendered from local evidence only."
+        return _text(request, "page.ask.status.bounded_external_reasoning"), _text(request, "page.ask.status.bounded_external_reasoning_detail")
+    return _text(request, "page.ask.status.local_answer"), _text(request, "page.ask.status.local_answer_detail")
 
 
-def _render_ask_evidence(items: object) -> str:
+def _ask_status_class(result: dict[str, object]) -> str:
+    answer_mode = str(result.get("answer_mode") or "local_only")
+    if answer_mode == "local_fallback":
+        return "ask-status warning"
+    if answer_mode == "insufficient_local_evidence":
+        return "ask-status incomplete"
+    return "ask-status"
+
+
+def _render_ask_evidence(request: Request, items: object) -> str:
     evidence_items = _coerce_items(items)
     if not evidence_items:
-        return "<div class='muted'>No evidence available for this answer.</div>"
+        return f"<div class='muted'>{escape(_text(request, 'page.ask.empty.evidence'))}</div>"
     cards: list[str] = []
     for raw_item in evidence_items:
         item = raw_item if isinstance(raw_item, dict) else {"title": str(raw_item)}
-        title = str(item.get("title") or "Untitled evidence")
+        title = str(item.get("title") or _text(request, "page.ask.fallback.untitled_evidence"))
         summary = str(item.get("summary") or "").strip()
-        snippet = str(item.get("snippet") or "").strip() or summary or "No snippet available."
+        snippet = str(item.get("snippet") or "").strip() or summary or _text(request, "page.ask.fallback.no_snippet")
         source_type = str(item.get("evidence_type") or ("document" if item.get("document_id") else "brief"))
         match_basis = str(item.get("match_basis") or "").strip()
         if item.get("document_id"):
             title_html = f"<a href='/web/documents/{escape(str(item['document_id']))}'>{escape(title)}</a>"
         else:
             title_html = escape(title)
-        meta_rows = [("Source", source_type)]
+        meta_rows = [(_text(request, "page.ask.meta.source"), source_type)]
         if match_basis:
-            meta_rows.append(("Match", match_basis))
+            meta_rows.append((_text(request, "page.ask.meta.match"), match_basis))
         cards.append(
             f"""
             <article class="ask-evidence-card">
@@ -214,24 +238,31 @@ def _render_ask_evidence(items: object) -> str:
     return "".join(cards)
 
 
-def _layout(title: str, body: str, message: str | None = None) -> HTMLResponse:
+def _layout(request: Request, title: str, body: str, message: str | None = None) -> HTMLResponse:
+    i18n = _i18n(request)
     nav_items = [
-        ("/web/dashboard", "Dashboard"),
-        ("/web/documents", "Documents"),
-        ("/web/review", "Review"),
-        ("/web/watchlist", "Watchlist"),
-        ("/web/ask", "Ask"),
-        ("/web/sources", "Sources"),
-        ("/web/ai-settings", "AI Settings"),
-        ("/web/system", "System"),
+        ("/web/dashboard", i18n.text("nav.dashboard")),
+        ("/web/documents", i18n.text("nav.documents")),
+        ("/web/review", i18n.text("nav.review")),
+        ("/web/watchlist", i18n.text("nav.watchlist")),
+        ("/web/ask", i18n.text("nav.ask")),
+        ("/web/sources", i18n.text("nav.sources")),
+        ("/web/ai-settings", i18n.text("nav.ai_settings")),
+        ("/web/system", i18n.text("nav.system")),
     ]
     nav_html = "".join(
         f'<a class="nav-link" href="{href}">{escape(label)}</a>' for href, label in nav_items
     )
+    lang_switch_html = (
+        f'<div class="inline">'
+        f'<a class="nav-link" href="{escape(i18n.switch_url("zh"))}">{escape(i18n.text("layout.lang.zh"))}</a>'
+        f'<a class="nav-link" href="{escape(i18n.switch_url("en"))}">{escape(i18n.text("layout.lang.en"))}</a>'
+        f"</div>"
+    )
     message_html = f'<div class="message">{escape(message)}</div>' if message else ""
     html = f"""
     <!doctype html>
-    <html lang="en">
+    <html lang="{escape(i18n.lang)}">
     <head>
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -325,8 +356,9 @@ def _layout(title: str, body: str, message: str | None = None) -> HTMLResponse:
         <div class="topbar">
           <div>
             <h1>{escape(title)}</h1>
-            <div class="sub">daily_news personal knowledge workbench</div>
+            <div class="sub">{escape(i18n.text("layout.subtitle"))}</div>
           </div>
+          {lang_switch_html}
         </div>
         <nav class="nav">{nav_html}</nav>
         {message_html}
@@ -344,12 +376,12 @@ def _redirect(target: str, message: str) -> RedirectResponse:
 
 
 @router.get("/web")
-async def web_index() -> RedirectResponse:
-    return RedirectResponse("/web/dashboard", status_code=303)
+async def web_index(request: Request) -> RedirectResponse:
+    return RedirectResponse(_dashboard_redirect_url(request), status_code=303)
 
 
 @router.get("/web/dashboard")
-async def dashboard(message: str | None = None) -> HTMLResponse:
+async def dashboard(request: Request, message: str | None = None) -> HTMLResponse:
     data = service.get_dashboard_data()
     counts = data["counts"]
     system_status = data.get("system_status") or {}
@@ -361,58 +393,58 @@ async def dashboard(message: str | None = None) -> HTMLResponse:
         f"<td>{escape(str(doc['created_at']))}</td>"
         f"<td>{escape(str(doc.get('summary_text', '-')))}</td></tr>"
         for doc in data["recent_documents"]
-    ) or _empty_table_row("No recent documents available.", colspan=6)
+    ) or _empty_table_row(_text(request, "shared.no_recent_documents"), colspan=6)
     topics_html = "".join(
         f"<li>{escape(name)} ({count})</li>" for name, count in data["top_topics"]
-    ) or _empty_list_item("No topics available.")
+    ) or _empty_list_item(_text(request, "shared.no_topics"))
     qa_html = "".join(
         f"<li><strong>{escape(item['question'])}</strong> <span class='muted'>[{escape(item['answer_mode'])}]</span></li>"
         for item in data["qa_history"]
-    ) or _empty_list_item("No recent Q&A available.")
+    ) or _empty_list_item(_text(request, "shared.no_recent_qa"))
     provider_html = "".join(
         f"<li>{escape(provider.name)} - {escape(provider.model)}"
         f" <span class='muted'>(default={_bool_label(provider.is_default)}, enabled={_bool_label(provider.is_enabled)})</span></li>"
         for provider in data["providers"]
-    ) or _empty_list_item("No providers available.")
-    db_note = _render_database_note(data["db_error"])
+    ) or _empty_list_item(_text(request, "shared.no_providers"))
+    db_note = _render_database_note(request, data["db_error"])
     body = f"""
     <div class="grid cols-3">
-      <div class="card"><div class="muted">Sources</div><div class="metric">{counts['sources']}</div></div>
-      <div class="card"><div class="muted">Documents</div><div class="metric">{counts['documents']}</div></div>
-      <div class="card"><div class="muted">Watchlist</div><div class="metric">{counts['watchlist']}</div></div>
-      <div class="card"><div class="muted">Review Edits</div><div class="metric">{counts['reviews']}</div></div>
+      <div class="card"><div class="muted">{escape(_text(request, "page.dashboard.sources"))}</div><div class="metric">{counts['sources']}</div></div>
+      <div class="card"><div class="muted">{escape(_text(request, "page.dashboard.documents"))}</div><div class="metric">{counts['documents']}</div></div>
+      <div class="card"><div class="muted">{escape(_text(request, "page.dashboard.watchlist"))}</div><div class="metric">{counts['watchlist']}</div></div>
+      <div class="card"><div class="muted">{escape(_text(request, "page.dashboard.review_edits"))}</div><div class="metric">{counts['reviews']}</div></div>
     </div>
     {db_note}
     <div class="grid cols-2" style="margin-top:16px;">
       <section class="card">
-        <h2>System Status</h2>
-        <div><strong>Database:</strong> {escape(str(system_status.get('database_label') or 'unknown'))}</div>
-        <div class="muted">{escape(str(system_status.get('database_detail') or 'No database detail available.'))}</div>
-        <div style="margin-top:10px;"><strong>Providers:</strong> {escape(str(system_status.get('provider_label') or 'No provider status available.'))}</div>
-        <div><strong>Knowledge:</strong> {escape(str(system_status.get('knowledge_label') or 'No knowledge status available.'))}</div>
+        <h2>{escape(_text(request, "page.dashboard.system_status"))}</h2>
+        <div><strong>{escape(_text(request, "page.dashboard.label.database"))}:</strong> {escape(str(system_status.get('database_label') or 'unknown'))}</div>
+        <div class="muted">{escape(str(system_status.get('database_detail') or _text(request, 'page.dashboard.fallback.database_detail')))}</div>
+        <div style="margin-top:10px;"><strong>{escape(_text(request, "page.dashboard.label.providers"))}:</strong> {escape(str(system_status.get('provider_label') or _text(request, 'page.dashboard.fallback.provider_status')))}</div>
+        <div><strong>{escape(_text(request, "page.dashboard.label.knowledge"))}:</strong> {escape(str(system_status.get('knowledge_label') or _text(request, 'page.dashboard.fallback.knowledge_status')))}</div>
       </section>
       <section class="card">
-        <h2>Recent Documents</h2>
+        <h2>{escape(_text(request, "page.dashboard.recent_documents"))}</h2>
         <table>
-          <thead><tr><th>Title</th><th>Source</th><th>Status</th><th>Published</th><th>Created</th><th>Summary</th></tr></thead>
+          <thead><tr><th>{escape(_text(request, "page.dashboard.col.title"))}</th><th>{escape(_text(request, "page.dashboard.col.source"))}</th><th>{escape(_text(request, "page.dashboard.col.status"))}</th><th>{escape(_text(request, "page.dashboard.col.published"))}</th><th>{escape(_text(request, "page.dashboard.col.created"))}</th><th>{escape(_text(request, "page.dashboard.col.summary"))}</th></tr></thead>
           <tbody>{docs_html}</tbody>
         </table>
       </section>
       <section class="card">
-        <h2>Top Topics</h2>
+        <h2>{escape(_text(request, "page.dashboard.top_topics"))}</h2>
         <ul>{topics_html}</ul>
-        <h3>AI Providers</h3>
+        <h3>{escape(_text(request, "page.dashboard.ai_providers"))}</h3>
         <ul>{provider_html}</ul>
-        <h3>Recent Q&A</h3>
+        <h3>{escape(_text(request, "page.dashboard.recent_qa"))}</h3>
         <ul>{qa_html}</ul>
       </section>
     </div>
     """
-    return _layout("Dashboard", body, message=message)
+    return _layout(request, _text(request, "page.dashboard.title"), body, message=message)
 
 
 @router.get("/web/sources")
-async def sources_page(message: str | None = None) -> HTMLResponse:
+async def sources_page(request: Request, message: str | None = None) -> HTMLResponse:
     sources, error = service.list_source_page_views()
     rows = "".join(
         f"<tr>"
@@ -426,14 +458,14 @@ async def sources_page(message: str | None = None) -> HTMLResponse:
         f"<td>{escape(str(source['last_import_at']))}</td>"
         f"<td>{escape(str(source['last_result']))}</td>"
         f"<td>"
-        f"<a class='nav-link' href='/web/sources/{escape(str(source['id']))}'>Edit</a> "
-        f"<form class='inline' method='post' action='/web/sources/{escape(str(source['id']))}/toggle'><button>Toggle</button></form> "
-        f"<form class='inline' method='post' action='/web/sources/{escape(str(source['id']))}/import'><button>Import</button></form>"
+        f"<a class='nav-link' href='/web/sources/{escape(str(source['id']))}'>{escape(_text(request, 'page.sources.action.edit'))}</a> "
+        f"<form class='inline' method='post' action='/web/sources/{escape(str(source['id']))}/toggle'><button>{escape(_text(request, 'page.sources.action.toggle'))}</button></form> "
+        f"<form class='inline' method='post' action='/web/sources/{escape(str(source['id']))}/import'><button>{escape(_text(request, 'page.sources.action.import'))}</button></form>"
         f"</td>"
         f"</tr>"
         for source in sources
-    ) or _empty_table_row("No sources available.", colspan=10)
-    error_html = _render_database_note(error)
+    ) or _empty_table_row(_text(request, "shared.no_sources"), colspan=10)
+    error_html = _render_database_note(request, error)
     source_type_options = "".join(
         f"<option value='{escape(value)}'>{escape(value)}</option>" for value in service.list_source_type_values()
     )
@@ -448,31 +480,31 @@ async def sources_page(message: str | None = None) -> HTMLResponse:
     {error_html}
     <div class="grid cols-2">
       <section class="card">
-        <h2>Add Source</h2>
-        <p class="muted">Ordinary web editing manages source configuration only. Formal seed baseline decisions remain in the maintenance workflow.</p>
+        <h2>{escape(_text(request, "page.sources.add"))}</h2>
+        <p class="muted">{escape(_text(request, "page.sources.intro"))}</p>
         <form method="post" action="/web/sources">
-          <input name="name" placeholder="Source name" required>
+          <input name="name" placeholder="{escape(_text(request, 'page.sources.placeholder.name'))}" required>
           <select name="source_type">{source_type_options}</select>
-          <input name="url" placeholder="https://example.com/article-or-homepage">
+          <input name="url" placeholder="{escape(_text(request, 'page.sources.placeholder.url'))}">
           <select name="credibility_level">{credibility_options}</select>
-          <input name="fetch_strategy" value="manual" placeholder="manual / rss / api / scrape">
+          <input name="fetch_strategy" value="manual" placeholder="{escape(_text(request, 'page.sources.placeholder.fetch_strategy'))}">
           <select name="maintenance_status">{maintenance_status_options}</select>
-          <textarea name="notes" placeholder="Maintenance notes, seed classification context, known limitations"></textarea>
-          <textarea name="config_json" placeholder='Optional source config JSON, for example {{"rss_url":"https://..."}}'></textarea>
-          <label><input type="checkbox" name="is_active" checked> active</label>
-          <button>Create Source</button>
+          <textarea name="notes" placeholder="{escape(_text(request, 'page.sources.placeholder.notes'))}"></textarea>
+          <textarea name="config_json" placeholder="{escape(_text(request, 'page.sources.placeholder.config_json'))}"></textarea>
+          <label><input type="checkbox" name="is_active" checked> {escape(_text(request, 'page.sources.active'))}</label>
+          <button>{escape(_text(request, "page.sources.create"))}</button>
         </form>
       </section>
       <section class="card">
-        <h2>Source Registry</h2>
+        <h2>{escape(_text(request, "page.sources.registry"))}</h2>
         <table>
-          <thead><tr><th>Name</th><th>Type</th><th>URL</th><th>Cred</th><th>Fetch</th><th>Status</th><th>Maint</th><th>Last Import</th><th>Last Result</th><th>Actions</th></tr></thead>
+          <thead><tr><th>{escape(_text(request, 'page.sources.col.name'))}</th><th>{escape(_text(request, 'page.sources.col.type'))}</th><th>{escape(_text(request, 'page.sources.col.url'))}</th><th>{escape(_text(request, 'page.sources.col.cred'))}</th><th>{escape(_text(request, 'page.sources.col.fetch'))}</th><th>{escape(_text(request, 'page.sources.col.status'))}</th><th>{escape(_text(request, 'page.sources.col.maint'))}</th><th>{escape(_text(request, 'page.sources.col.last_import'))}</th><th>{escape(_text(request, 'page.sources.col.last_result'))}</th><th>{escape(_text(request, 'page.sources.col.actions'))}</th></tr></thead>
           <tbody>{rows}</tbody>
         </table>
       </section>
     </div>
     """
-    return _layout("Sources", body, message=message)
+    return _layout(request, _text(request, "page.sources.title"), body, message=message)
 
 
 @router.post("/web/sources")
@@ -482,11 +514,11 @@ async def create_source(request: Request) -> RedirectResponse:
 
 
 @router.get("/web/sources/{source_id}")
-async def source_detail(source_id: str, message: str | None = None) -> HTMLResponse:
+async def source_detail(request: Request, source_id: str, message: str | None = None) -> HTMLResponse:
     source_view, error = service.get_source_page_view(source_id)
     if source_view is None:
-        body = f"<div class='card'>Source not found. {escape(error or '')}</div>"
-        return _layout("Source Detail", body, message=message)
+        body = f"<div class='card'>{escape(_text(request, 'page.sources.not_found'))} {escape(error or '')}</div>"
+        return _layout(request, _text(request, "page.sources.edit"), body, message=message)
     source_type_options = "".join(
         f"<option value='{escape(value)}'{' selected' if value == source_view['source_type'] else ''}>{escape(value)}</option>"
         for value in service.list_source_type_values()
@@ -499,7 +531,7 @@ async def source_detail(source_id: str, message: str | None = None) -> HTMLRespo
         maintenance_status_input = (
             f"<div class='pre'>formal_seed</div>"
             f"<input type='hidden' name='maintenance_status' value='formal_seed'>"
-            f"<div class='muted'>Formal seed baseline status is visible here but not editable from the ordinary web form.</div>"
+            f"<div class='muted'>{escape(_text(request, 'page.sources.detail.formal_seed_visible'))}</div>"
         )
     else:
         maintenance_status_options = "".join(
@@ -508,42 +540,42 @@ async def source_detail(source_id: str, message: str | None = None) -> HTMLRespo
         )
         maintenance_status_input = (
             f"<select name='maintenance_status'>{maintenance_status_options}</select>"
-            f"<div class='muted'>Formal seed baseline promotion is not handled in ordinary web editing.</div>"
+            f"<div class='muted'>{escape(_text(request, 'page.sources.detail.formal_seed_not_handled'))}</div>"
         )
     body = f"""
     <div class="grid cols-2">
       <section class="card">
-        <h2>Edit Source</h2>
-        <p class="muted">This form updates source configuration and observation notes. It is not the authority for formal seed promotion.</p>
+        <h2>{escape(_text(request, "page.sources.edit"))}</h2>
+        <p class="muted">{escape(_text(request, "page.sources.detail_intro"))}</p>
         <form method="post" action="/web/sources/{escape(str(source_view['id']))}">
           <input name="name" value="{escape(str(source_view.get('editable_name', '')))}" required>
           <select name="source_type">{source_type_options}</select>
-          <input name="url" value="{escape('' if source_view['url'] == '-' else str(source_view['url']))}" placeholder="https://example.com/article-or-homepage">
+          <input name="url" value="{escape('' if source_view['url'] == '-' else str(source_view['url']))}" placeholder="{escape(_text(request, 'page.sources.placeholder.url'))}">
           <select name="credibility_level">{credibility_options}</select>
           <input name="fetch_strategy" value="{escape('' if source_view['fetch_strategy'] == '-' else str(source_view['fetch_strategy']))}">
           {maintenance_status_input}
-          <textarea name="notes" placeholder="Maintenance notes">{escape(str(source_view['notes']))}</textarea>
-          <textarea name="config_json" placeholder='Optional source config JSON'>{escape(str(source_view['raw_config_json']))}</textarea>
-          <label><input type="checkbox" name="is_active" {'checked' if source_view['is_active'] else ''}> active</label>
-          <button>Save Source</button>
+          <textarea name="notes" placeholder="{escape(_text(request, 'page.sources.placeholder.notes'))}">{escape(str(source_view['notes']))}</textarea>
+          <textarea name="config_json" placeholder="{escape(_text(request, 'page.sources.placeholder.config_json'))}">{escape(str(source_view['raw_config_json']))}</textarea>
+          <label><input type="checkbox" name="is_active" {'checked' if source_view['is_active'] else ''}> {escape(_text(request, 'page.sources.active'))}</label>
+          <button>{escape(_text(request, "page.sources.save"))}</button>
         </form>
       </section>
       <section class="card stack">
-        <div><strong>Source:</strong> {escape(str(source_view['name']))}</div>
-        <div><strong>Status:</strong> {escape(str(source_view['activity_label']))}</div>
-        <div><strong>Maintenance status:</strong> {escape(str(source_view['maintenance_status']))}</div>
-        <div><strong>Last import:</strong> {escape(str(source_view['last_import_at']))}</div>
-        <div><strong>Last result:</strong> {escape(str(source_view['last_result']))}</div>
-        <div><strong>Notes:</strong><div class="pre">{escape(str(source_view['notes'] or '-'))}</div></div>
+        <div><strong>{escape(_text(request, 'page.sources.label.source'))}:</strong> {escape(str(source_view['name']))}</div>
+        <div><strong>{escape(_text(request, 'page.sources.label.status'))}:</strong> {escape(str(source_view['activity_label']))}</div>
+        <div><strong>{escape(_text(request, "page.sources.maintenance_status"))}：</strong> {escape(str(source_view['maintenance_status']))}</div>
+        <div><strong>{escape(_text(request, 'page.sources.label.last_import'))}:</strong> {escape(str(source_view['last_import_at']))}</div>
+        <div><strong>{escape(_text(request, 'page.sources.label.last_result'))}:</strong> {escape(str(source_view['last_result']))}</div>
+        <div><strong>{escape(_text(request, 'page.sources.label.notes'))}:</strong><div class="pre">{escape(str(source_view['notes'] or '-'))}</div></div>
         <div class="inline">
-          <form class='inline' method='post' action='/web/sources/{escape(str(source_view['id']))}/toggle'><button>Toggle Active</button></form>
-          <form class='inline' method='post' action='/web/sources/{escape(str(source_view['id']))}/import'><button>Import Now</button></form>
-          <a href="/web/sources">Back to Sources</a>
+          <form class='inline' method='post' action='/web/sources/{escape(str(source_view['id']))}/toggle'><button>{escape(_text(request, 'page.sources.action.toggle_active'))}</button></form>
+          <form class='inline' method='post' action='/web/sources/{escape(str(source_view['id']))}/import'><button>{escape(_text(request, 'page.sources.action.import_now'))}</button></form>
+          <a href="/web/sources">{escape(_text(request, 'page.sources.action.back'))}</a>
         </div>
       </section>
     </div>
     """
-    return _layout("Source Detail", body, message=message)
+    return _layout(request, _text(request, "page.sources.edit"), body, message=message)
 
 
 @router.post("/web/sources/{source_id}")
@@ -564,21 +596,22 @@ async def import_source(source_id: str) -> RedirectResponse:
 
 @router.get("/web/documents")
 async def documents_page(
+    request: Request,
     message: str | None = None,
     q: str = "",
     source_id: str = "",
 ) -> HTMLResponse:
     documents, error = service.list_document_views(query=q, source_id=source_id)
     sources, _ = service.list_sources()
-    source_options = ["<option value=''>All sources</option>"]
-    selected_source_name = "All sources" if not source_id.strip() else "Unknown source filter"
+    source_options = [f"<option value=''>{escape(_text(request, 'page.documents.source_all'))}</option>"]
+    selected_source_name = _text(request, "page.documents.source_all") if not source_id.strip() else _text(request, "page.documents.source_unknown")
     for source in sources:
         selected = " selected" if source_id == str(source.id) else ""
         if selected:
             selected_source_name = source.name
         source_options.append(f"<option value='{source.id}'{selected}>{escape(source.name)}</option>")
     has_filters = bool(q.strip() or source_id.strip())
-    empty_message = "No documents matched the current filters." if has_filters else "No documents available."
+    empty_message = _text(request, "page.documents.empty.filtered") if has_filters else _text(request, "page.documents.empty.all")
     rows = "".join(
         f"<tr>"
         f"<td><a href='/web/documents/{escape(str(doc['id']))}'>{escape(str(doc['title']))}</a></td>"
@@ -590,84 +623,84 @@ async def documents_page(
         f"</tr>"
         for doc in documents
     ) or _empty_table_row(empty_message, colspan=6)
-    error_html = _render_database_note(error)
+    error_html = _render_database_note(request, error)
     filters_html = f"""
       <section class="card">
-        <h2>Filters currently applied</h2>
-        <div><strong>Query:</strong> {escape(q.strip() or "None")}</div>
-        <div><strong>Source:</strong> {escape(selected_source_name)}</div>
+        <h2>{escape(_text(request, "page.documents.filters"))}</h2>
+        <div><strong>{escape(_text(request, "page.documents.query"))}:</strong> {escape(q.strip() or _text(request, "page.documents.query_none"))}</div>
+        <div><strong>{escape(_text(request, "page.documents.source"))}:</strong> {escape(selected_source_name)}</div>
       </section>
     """
     body = f"""
     {error_html}
     <div class="grid cols-2">
       <section class="card">
-        <h2>Search</h2>
+        <h2>{escape(_text(request, "page.documents.search"))}</h2>
         <form method="get" action="/web/documents">
-          <input name="q" value="{escape(q)}" placeholder="Search title, content, URL">
+          <input name="q" value="{escape(q)}" placeholder="{escape(_text(request, 'page.documents.placeholder.search'))}">
           <select name="source_id">{''.join(source_options)}</select>
-          <button>Apply</button>
+          <button>{escape(_text(request, "page.documents.apply"))}</button>
         </form>
       </section>
       {filters_html}
     </div>
     <div class="grid" style="margin-top:16px;">
       <section class="card">
-        <h2>Document List</h2>
+        <h2>{escape(_text(request, "page.documents.list"))}</h2>
         <table>
-          <thead><tr><th>Title</th><th>Source</th><th>Status</th><th>Language</th><th>Published</th><th>Summary</th></tr></thead>
+          <thead><tr><th>{escape(_text(request, "page.documents.col.title"))}</th><th>{escape(_text(request, "page.documents.col.source"))}</th><th>{escape(_text(request, "page.documents.col.status"))}</th><th>{escape(_text(request, "page.documents.col.language"))}</th><th>{escape(_text(request, "page.documents.col.published"))}</th><th>{escape(_text(request, "page.documents.col.summary"))}</th></tr></thead>
           <tbody>{rows}</tbody>
         </table>
       </section>
     </div>
     """
-    return _layout("Documents / Knowledge", body, message=message)
+    return _layout(request, _text(request, "page.documents.title"), body, message=message)
 
 
 @router.get("/web/documents/{document_id}")
-async def document_detail(document_id: str, message: str | None = None) -> HTMLResponse:
+async def document_detail(request: Request, document_id: str, message: str | None = None) -> HTMLResponse:
     document, error = service.get_document_view(document_id)
     if document is None:
-        body = f"<div class='card'>Document not found. {escape(error or '')}</div>"
-        return _layout("Document Detail", body, message=message)
+        body = f"<div class='card'>{escape(_text(request, 'page.document_detail.not_found'))} {escape(error or '')}</div>"
+        return _layout(request, _text(request, "page.document_detail.title"), body, message=message)
     entity_html = "".join(f"<span class='chip'>{escape(str(label))}</span>" for label in document["entities"])
     topic_html = "".join(f"<span class='chip'>{escape(str(label))}</span>" for label in document["topics"])
     key_points = "<br>".join(escape(str(point)) for point in document["key_points"])
     url_value = str(document["url"]).strip()
     url_html = f"<a href=\"{escape(url_value)}\">{escape(url_value)}</a>" if url_value else "-"
-    entities_block = entity_html or "<span class='muted'>No entities.</span>"
-    topics_block = topic_html or "<span class='muted'>No topics.</span>"
+    entities_block = entity_html or f"<span class='muted'>{escape(_text(request, 'page.document_detail.no_entities'))}</span>"
+    topics_block = topic_html or f"<span class='muted'>{escape(_text(request, 'page.document_detail.no_topics'))}</span>"
     body = f"""
     <div class="grid cols-2">
       <section class="card stack">
-        <div><strong>Title:</strong> {escape(str(document['title']))}</div>
-        <div><strong>Source:</strong> {escape(str(document['source_name']))}</div>
-        <div><strong>URL:</strong> {url_html}</div>
-        <div><strong>Status:</strong> {escape(str(document['status']))}</div>
-        <div><strong>Language:</strong> {escape(str(document['language']))}</div>
-        <div><strong>Published:</strong> {escape(str(document['published_at']))}</div>
-        <div><strong>Summary EN:</strong><div class="pre">{escape(str(document['summary_en'] or '-'))}</div></div>
-        <div><strong>Summary ZH:</strong><div class="pre">{escape(str(document['summary_zh'] or '-'))}</div></div>
-        <div><strong>Key Points:</strong><div class="pre">{key_points or '-'}</div></div>
+        <div><strong>{escape(_text(request, "page.document_detail.label.title"))}:</strong> {escape(str(document['title']))}</div>
+        <div><strong>{escape(_text(request, "page.document_detail.label.source"))}:</strong> {escape(str(document['source_name']))}</div>
+        <div><strong>{escape(_text(request, "page.document_detail.label.url"))}:</strong> {url_html}</div>
+        <div><strong>{escape(_text(request, "page.document_detail.label.status"))}:</strong> {escape(str(document['status']))}</div>
+        <div><strong>{escape(_text(request, "page.document_detail.label.language"))}:</strong> {escape(str(document['language']))}</div>
+        <div><strong>{escape(_text(request, "page.document_detail.label.published"))}:</strong> {escape(str(document['published_at']))}</div>
+        <div><strong>{escape(_text(request, "page.document_detail.label.summary_en"))}：</strong><div class="pre">{escape(str(document['summary_en'] or '-'))}</div></div>
+        <div><strong>{escape(_text(request, "page.document_detail.label.summary_zh"))}：</strong><div class="pre">{escape(str(document['summary_zh'] or '-'))}</div></div>
+        <div><strong>{escape(_text(request, "page.document_detail.label.key_points"))}：</strong><div class="pre">{key_points or '-'}</div></div>
       </section>
       <section class="card stack">
-        <div><strong>Entities</strong><div class="chips">{entities_block}</div></div>
-        <div><strong>Topics</strong><div class="chips">{topics_block}</div></div>
-        <div><strong>Content Preview</strong><div class="pre">{escape(str(document['content_preview'] or '-'))}</div></div>
+        <div><strong>{escape(_text(request, "page.document_detail.entities"))}</strong><div class="chips">{entities_block}</div></div>
+        <div><strong>{escape(_text(request, "page.document_detail.topics"))}</strong><div class="chips">{topics_block}</div></div>
+        <div><strong>{escape(_text(request, "page.document_detail.content_preview"))}</strong><div class="pre">{escape(str(document['content_preview'] or '-'))}</div></div>
         <div class="inline">
-          <a href="/web/review">Go to Review</a>
-          <a href="/web/ask">Ask from this knowledge</a>
+          <a href="/web/review">{escape(_text(request, "page.document_detail.go_review"))}</a>
+          <a href="/web/ask">{escape(_text(request, "page.document_detail.ask"))}</a>
         </div>
       </section>
     </div>
     """
     if error:
-        body = f"{_render_database_note(error)}{body}"
-    return _layout("Document Detail", body, message=message)
+        body = f"{_render_database_note(request, error)}{body}"
+    return _layout(request, _text(request, "page.document_detail.title"), body, message=message)
 
 
 @router.get("/web/review")
-async def review_page(message: str | None = None) -> HTMLResponse:
+async def review_page(request: Request, message: str | None = None) -> HTMLResponse:
     uncertainties, uncertainty_error = service.list_review_uncertainties()
     risks, risk_error = service.list_review_risks()
     opportunities, opportunity_error = service.list_review_opportunities()
@@ -680,12 +713,12 @@ async def review_page(message: str | None = None) -> HTMLResponse:
         history_html = "".join(
             f"<li>{escape(edit.field_name)} -> {escape(str(edit.new_value))} <span class='muted'>{escape(str(edit.created_at))}</span></li>"
             for edit in item.history
-        ) or _empty_list_item("No review history available for this item.")
+        ) or _empty_list_item(_text(request, "page.review.no_history_item"))
         current_uncertainty_status = item.effective_values.get("uncertainty_status")
         uncertainty_status_options = []
         if current_uncertainty_status is None:
             uncertainty_status_options.append(
-                '<option value="__UNCHANGED__" selected>-- keep auto / no manual override --</option>'
+                f'<option value="__UNCHANGED__" selected>{escape(_text(request, "page.review.keep_auto_option"))}</option>'
             )
         for value in ("open", "watching", "resolved"):
             selected = " selected" if current_uncertainty_status == value else ""
@@ -695,29 +728,29 @@ async def review_page(message: str | None = None) -> HTMLResponse:
         uncertainty_sections.append(
             f"""
             <section class="card">
-              <h2>Uncertainty Review</h2>
+              <h2>{escape(_text(request, "page.review.uncertainty"))}</h2>
               <div><strong>{escape(item.uncertainty_item)}</strong></div>
-              <div class="muted">Brief id: {item.brief.id}</div>
-              <div class="muted">Uncertainty item id: {escape(item.item_id)}</div>
+              <div class="muted">{escape(_text(request, "page.review.label.brief_id"))}: {item.brief.id}</div>
+              <div class="muted">{escape(_text(request, "page.review.label.uncertainty_item_id"))}: {escape(item.item_id)}</div>
                 <div class="grid cols-2" style="margin-top:12px;">
                   <div>
-                    <h3>Automatic Result</h3>
+                    <h3>{escape(_text(request, "page.review.automatic"))}</h3>
                     <div class="pre">uncertainty_note={escape(str(item.auto_values.get("uncertainty_note") or ""))}
 uncertainty_status={escape(str(item.auto_values.get("uncertainty_status") or ""))}</div>
                   </div>
                   <div>
-                    <h3>Effective Values</h3>
+                    <h3>{escape(_text(request, "page.review.effective"))}</h3>
                     <form method="post" action="/web/review/uncertainties/{item.brief.id}/{item.route_id}">
                       <textarea name="uncertainty_note" placeholder="uncertainty_note">{escape(str(item.effective_values.get("uncertainty_note") or ""))}</textarea>
-                      <label><input type="checkbox" name="reset_uncertainty_note"> reset to auto</label>
+                      <label><input type="checkbox" name="reset_uncertainty_note"> {escape(_text(request, "page.review.reset_to_auto"))}</label>
                       <select name="uncertainty_status">{"".join(uncertainty_status_options)}</select>
-                      <label><input type="checkbox" name="reset_uncertainty_status"> reset to auto</label>
-                      <input name="reason" placeholder="Why are you editing this uncertainty?">
-                      <button>Save Uncertainty Review</button>
+                      <label><input type="checkbox" name="reset_uncertainty_status"> {escape(_text(request, "page.review.reset_to_auto"))}</label>
+                      <input name="reason" placeholder="{escape(_text(request, 'page.review.reason.uncertainty'))}">
+                      <button>{escape(_text(request, "page.review.save_uncertainty"))}</button>
                     </form>
                   </div>
                 </div>
-                <h3>Review History</h3>
+                <h3>{escape(_text(request, "page.review.history"))}</h3>
                 <ul>{history_html}</ul>
               </section>
               """
@@ -726,7 +759,7 @@ uncertainty_status={escape(str(item.auto_values.get("uncertainty_status") or "")
         history_html = "".join(
             f"<li>{escape(edit.field_name)} -> {escape(str(edit.new_value))} <span class='muted'>{escape(str(edit.created_at))}</span></li>"
             for edit in item.history
-        ) or _empty_list_item("No review history available for this item.")
+        ) or _empty_list_item(_text(request, "page.review.no_history_item"))
         severity_options = "".join(
             f"<option value='{escape(value)}'{' selected' if item.effective_values.get('severity') == value else ''}>{escape(value)}</option>"
             for value in ("high", "medium", "low")
@@ -734,29 +767,29 @@ uncertainty_status={escape(str(item.auto_values.get("uncertainty_status") or "")
         risk_sections.append(
             f"""
             <section class="card">
-              <h2>Risk Review</h2>
-              <div><strong>{escape(str(item.risk_item.get("title") or "Untitled risk"))}</strong></div>
-              <div class="muted">Brief id: {item.brief.id}</div>
-              <div class="muted">Risk item id: {escape(item.item_id)}</div>
+              <h2>{escape(_text(request, "page.review.risk"))}</h2>
+              <div><strong>{escape(str(item.risk_item.get("title") or _text(request, "page.review.untitled_risk")))}</strong></div>
+              <div class="muted">{escape(_text(request, "page.review.label.brief_id"))}: {item.brief.id}</div>
+              <div class="muted">{escape(_text(request, "page.review.label.risk_item_id"))}: {escape(item.item_id)}</div>
                 <div class="grid cols-2" style="margin-top:12px;">
                   <div>
-                    <h3>Automatic Result</h3>
+                    <h3>{escape(_text(request, "page.review.automatic"))}</h3>
                     <div class="pre">severity={escape(str(item.auto_values.get("severity") or ""))}
 description={escape(str(item.auto_values.get("description") or ""))}</div>
                   </div>
                   <div>
-                    <h3>Effective Values</h3>
+                    <h3>{escape(_text(request, "page.review.effective"))}</h3>
                     <form method="post" action="/web/review/risks/{item.brief.id}/{item.route_id}">
                       <select name="severity">{severity_options}</select>
-                      <label><input type="checkbox" name="reset_severity"> reset to auto</label>
+                      <label><input type="checkbox" name="reset_severity"> {escape(_text(request, "page.review.reset_to_auto"))}</label>
                       <textarea name="description" placeholder="description">{escape(str(item.effective_values.get("description") or ""))}</textarea>
-                      <label><input type="checkbox" name="reset_description"> reset to auto</label>
-                      <input name="reason" placeholder="Why are you editing this risk?">
-                      <button>Save Risk Review</button>
+                      <label><input type="checkbox" name="reset_description"> {escape(_text(request, "page.review.reset_to_auto"))}</label>
+                      <input name="reason" placeholder="{escape(_text(request, 'page.review.reason.risk'))}">
+                      <button>{escape(_text(request, "page.review.save_risk"))}</button>
                     </form>
                   </div>
                 </div>
-                <h3>Review History</h3>
+                <h3>{escape(_text(request, "page.review.history"))}</h3>
                 <ul>{history_html}</ul>
               </section>
               """
@@ -766,7 +799,7 @@ description={escape(str(item.auto_values.get("description") or ""))}</div>
         history_html = "".join(
             f"<li>{escape(edit.field_name)} -> {escape(str(edit.new_value))} <span class='muted'>{escape(str(edit.created_at))}</span></li>"
             for edit in item.history
-        ) or _empty_list_item("No review history available for this item.")
+        ) or _empty_list_item(_text(request, "page.review.no_history_item"))
         status_options = "".join(
             f"<option value='{escape(value)}'{' selected' if item.effective_values.get('status') == value else ''}>{escape(value)}</option>"
             for value in ("candidate", "confirmed", "dismissed", "watching")
@@ -781,13 +814,13 @@ description={escape(str(item.auto_values.get("description") or ""))}</div>
         opportunity_sections.append(
             f"""
             <section class="card">
-              <h2>Opportunity Review</h2>
-              <div><strong>{escape(opportunity.title_en or opportunity.title_zh or "Untitled opportunity")}</strong></div>
-              <div class="muted">Opportunity target id: {opportunity.id}</div>
-              <div class="muted">Source document: {escape(item.source_document_title or '-')}</div>
+              <h2>{escape(_text(request, "page.review.opportunity"))}</h2>
+              <div><strong>{escape(opportunity.title_en or opportunity.title_zh or _text(request, "page.review.untitled_opportunity"))}</strong></div>
+              <div class="muted">{escape(_text(request, "page.review.label.opportunity_target_id"))}: {opportunity.id}</div>
+              <div class="muted">{escape(_text(request, "page.review.label.source_document"))}: {escape(item.source_document_title or '-')}</div>
                 <div class="grid cols-2" style="margin-top:12px;">
                   <div>
-                    <h3>Automatic Result</h3>
+                    <h3>{escape(_text(request, "page.review.automatic"))}</h3>
                   <div class="pre">need_realness={escape(str(item.auto_values.get("need_realness")))}
 market_gap={escape(str(item.auto_values.get("market_gap")))}
 feasibility={escape(str(item.auto_values.get("feasibility")))}
@@ -799,32 +832,32 @@ total_score={escape(str(item.auto_values.get("total_score")))}
   status={escape(str(item.auto_values.get("status") or ""))}</div>
                   </div>
                   <div>
-                    <h3>Effective Values</h3>
+                    <h3>{escape(_text(request, "page.review.effective"))}</h3>
                     <form method="post" action="/web/review/opportunities/{opportunity.id}">
                     <input name="need_realness" type="number" min="1" max="10" value="{escape(str(item.effective_values.get("need_realness") or ""))}" placeholder="need_realness">
-                    <label><input type="checkbox" name="reset_need_realness"> reset to auto</label>
+                    <label><input type="checkbox" name="reset_need_realness"> {escape(_text(request, "page.review.reset_to_auto"))}</label>
                     <input name="market_gap" type="number" min="1" max="10" value="{escape(str(item.effective_values.get("market_gap") or ""))}" placeholder="market_gap">
-                    <label><input type="checkbox" name="reset_market_gap"> reset to auto</label>
+                    <label><input type="checkbox" name="reset_market_gap"> {escape(_text(request, "page.review.reset_to_auto"))}</label>
                     <input name="feasibility" type="number" min="1" max="10" value="{escape(str(item.effective_values.get("feasibility") or ""))}" placeholder="feasibility">
-                    <label><input type="checkbox" name="reset_feasibility"> reset to auto</label>
+                    <label><input type="checkbox" name="reset_feasibility"> {escape(_text(request, "page.review.reset_to_auto"))}</label>
                     <input name="priority_score" type="number" min="1" max="10" value="{escape(str(item.effective_values.get("priority_score") or ""))}" placeholder="priority_score">
-                    <label><input type="checkbox" name="reset_priority_score"> reset to auto</label>
+                    <label><input type="checkbox" name="reset_priority_score"> {escape(_text(request, "page.review.reset_to_auto"))}</label>
                     <input name="evidence_score" type="number" min="1" max="10" value="{escape(str(item.effective_values.get("evidence_score") or ""))}" placeholder="evidence_score">
-                    <label><input type="checkbox" name="reset_evidence_score"> reset to auto</label>
+                    <label><input type="checkbox" name="reset_evidence_score"> {escape(_text(request, "page.review.reset_to_auto"))}</label>
                     <input name="total_score" type="number" step="0.1" value="{escape(str(item.effective_values.get("total_score") or ""))}" placeholder="total_score">
-                    <label><input type="checkbox" name="reset_total_score"> reset to auto</label>
+                    <label><input type="checkbox" name="reset_total_score"> {escape(_text(request, "page.review.reset_to_auto"))}</label>
                     <select name="uncertainty">{uncertainty_options}</select>
-                    <label><input type="checkbox" name="reset_uncertainty"> reset to auto</label>
+                    <label><input type="checkbox" name="reset_uncertainty"> {escape(_text(request, "page.review.reset_to_auto"))}</label>
                     <input name="uncertainty_reason" value="{escape(str(item.effective_values.get("uncertainty_reason") or ""))}" placeholder="uncertainty_reason">
-                    <label><input type="checkbox" name="reset_uncertainty_reason"> reset to auto</label>
+                    <label><input type="checkbox" name="reset_uncertainty_reason"> {escape(_text(request, "page.review.reset_to_auto"))}</label>
                     <select name="status">{status_options}</select>
-                    <label><input type="checkbox" name="reset_status"> reset to auto</label>
-                      <input name="reason" placeholder="Why are you editing this opportunity?">
-                      <button>Save Opportunity Review</button>
+                    <label><input type="checkbox" name="reset_status"> {escape(_text(request, "page.review.reset_to_auto"))}</label>
+                      <input name="reason" placeholder="{escape(_text(request, 'page.review.reason.opportunity'))}">
+                      <button>{escape(_text(request, "page.review.save_opportunity"))}</button>
                     </form>
                   </div>
                 </div>
-                <h3>Review History</h3>
+                <h3>{escape(_text(request, "page.review.history"))}</h3>
                 <ul>{history_html}</ul>
               </section>
               """
@@ -836,54 +869,54 @@ total_score={escape(str(item.auto_values.get("total_score")))}
         history_html = "".join(
             f"<li>{escape(edit.field_name)} -> {escape(str(edit.new_value))} <span class='muted'>{escape(str(edit.created_at))}</span></li>"
             for edit in history[:5]
-        ) or _empty_list_item("No review history available for this item.")
+        ) or _empty_list_item(_text(request, "page.review.no_history_item"))
         auto_key_points_text = "\n".join(str(point) for point in item.auto_values.get("key_points") or [])
         effective_key_points_text = "\n".join(str(point) for point in item.effective_values.get("key_points") or [])
         sections.append(
             f"""
             <section class="card">
-              <h2>Summary Review</h2>
+              <h2>{escape(_text(request, "page.review.summary"))}</h2>
               <div><strong>{escape(document.title)}</strong></div>
-              <div class="muted">Summary target id: {summary.id}</div>
+              <div class="muted">{escape(_text(request, "page.review.label.summary_target_id"))}: {summary.id}</div>
                 <div class="grid cols-2" style="margin-top:12px;">
                   <div>
-                    <h3>Automatic Result</h3>
+                    <h3>{escape(_text(request, "page.review.automatic"))}</h3>
                     <div class="pre">summary_zh={escape(str(item.auto_values.get("summary_zh") or ""))}
 summary_en={escape(str(item.auto_values.get("summary_en") or ""))}
 key_points={escape(auto_key_points_text)}</div>
                   </div>
                   <div>
-                    <h3>Effective Values</h3>
+                    <h3>{escape(_text(request, "page.review.effective"))}</h3>
                     <form method="post" action="/web/review/{summary.id}">
                     <textarea name="summary_zh" placeholder="summary_zh">{escape(str(item.effective_values.get("summary_zh") or ""))}</textarea>
-                    <label><input type="checkbox" name="reset_summary_zh"> reset to auto</label>
+                    <label><input type="checkbox" name="reset_summary_zh"> {escape(_text(request, "page.review.reset_to_auto"))}</label>
                     <textarea name="summary_en" placeholder="summary_en">{escape(str(item.effective_values.get("summary_en") or ""))}</textarea>
-                    <label><input type="checkbox" name="reset_summary_en"> reset to auto</label>
-                    <textarea name="key_points" placeholder="One key point per line">{escape(effective_key_points_text)}</textarea>
-                    <label><input type="checkbox" name="reset_key_points"> reset to auto</label>
-                      <input name="reason" placeholder="Why are you editing this summary?">
-                      <button>Save Review</button>
+                    <label><input type="checkbox" name="reset_summary_en"> {escape(_text(request, "page.review.reset_to_auto"))}</label>
+                    <textarea name="key_points" placeholder="{escape(_text(request, 'page.review.placeholder.key_points'))}">{escape(effective_key_points_text)}</textarea>
+                    <label><input type="checkbox" name="reset_key_points"> {escape(_text(request, "page.review.reset_to_auto"))}</label>
+                      <input name="reason" placeholder="{escape(_text(request, 'page.review.reason.summary'))}">
+                      <button>{escape(_text(request, "page.review.save_summary"))}</button>
                     </form>
                   </div>
                 </div>
-                <h3>Review History</h3>
+                <h3>{escape(_text(request, "page.review.history"))}</h3>
                 <ul>{history_html}</ul>
               </section>
               """
         )
-    content = "".join(uncertainty_sections + risk_sections + opportunity_sections + sections) or "<div class='card'>No review items available.</div>"
+    content = "".join(uncertainty_sections + risk_sections + opportunity_sections + sections) or f"<div class='card'>{escape(_text(request, 'page.review.empty'))}</div>"
     notes = []
     if uncertainty_error:
-        notes.append(_render_database_note(uncertainty_error))
+        notes.append(_render_database_note(request, uncertainty_error))
     if risk_error:
-        notes.append(_render_database_note(risk_error))
+        notes.append(_render_database_note(request, risk_error))
     if opportunity_error:
-        notes.append(_render_database_note(opportunity_error))
+        notes.append(_render_database_note(request, opportunity_error))
     if error:
-        notes.append(_render_database_note(error))
+        notes.append(_render_database_note(request, error))
     if notes:
         content = "".join(notes) + content
-    return _layout("Review", content, message=message)
+    return _layout(request, _text(request, "page.review.title"), content, message=message)
 
 
 @router.post("/web/review/{summary_id}")
@@ -911,7 +944,7 @@ async def save_uncertainty_review(brief_id: str, route_id: str, request: Request
 
 
 @router.get("/web/watchlist")
-async def watchlist_page(message: str | None = None) -> HTMLResponse:
+async def watchlist_page(request: Request, message: str | None = None) -> HTMLResponse:
     items, error = service.list_watchlist_items()
     type_options = "".join(
         f"<option value='{escape(value)}'>{escape(value)}</option>"
@@ -926,42 +959,42 @@ async def watchlist_page(message: str | None = None) -> HTMLResponse:
         hits = service.list_watchlist_hits(item.item_value)[:3]
         hits_html = "".join(
             f"<li><a href='/web/documents/{doc.id}'>{escape(doc.title)}</a></li>" for doc in hits
-        ) or "<li>No related documents yet.</li>"
+        ) or _empty_list_item(_text(request, "page.watchlist.no_related_documents"))
         rows.append(
             f"""
             <section class="card">
               <h2>{escape(item.item_value)}</h2>
               <div class="muted">{escape(item.item_type)} / {escape(item.priority_level)} / {escape(item.status)}</div>
               <div>{escape(item.notes or '')}</div>
-              <h3>Related Documents</h3>
+              <h3>{escape(_text(request, "page.watchlist.related_documents"))}</h3>
               <ul>{hits_html}</ul>
               <div class="inline">
-                <form class='inline' method='post' action='/web/watchlist/{item.id}/status'><input type='hidden' name='status' value='active'><button>Active</button></form>
-                <form class='inline' method='post' action='/web/watchlist/{item.id}/status'><input type='hidden' name='status' value='paused'><button>Pause</button></form>
-                <form class='inline' method='post' action='/web/watchlist/{item.id}/status'><input type='hidden' name='status' value='removed'><button>Remove</button></form>
+                <form class='inline' method='post' action='/web/watchlist/{item.id}/status'><input type='hidden' name='status' value='active'><button>{escape(_text(request, "page.watchlist.action.active"))}</button></form>
+                <form class='inline' method='post' action='/web/watchlist/{item.id}/status'><input type='hidden' name='status' value='paused'><button>{escape(_text(request, "page.watchlist.action.pause"))}</button></form>
+                <form class='inline' method='post' action='/web/watchlist/{item.id}/status'><input type='hidden' name='status' value='removed'><button>{escape(_text(request, "page.watchlist.action.remove"))}</button></form>
               </div>
             </section>
             """
         )
-    error_html = f"<div class='card'><strong>Database note:</strong> {escape(error)}</div>" if error else ""
+    error_html = _render_database_note(request, error)
     body = f"""
     {error_html}
     <div class="grid cols-2">
       <section class="card">
-        <h2>Add Watchlist Item</h2>
+        <h2>{escape(_text(request, "page.watchlist.add"))}</h2>
         <form method="post" action="/web/watchlist">
           <select name="item_type">{type_options}</select>
-          <input name="item_value" placeholder="OpenAI, Claude Code, agent ops..." required>
+          <input name="item_value" placeholder="{escape(_text(request, 'page.watchlist.placeholder.value'))}" required>
           <select name="priority_level">{priority_options}</select>
-          <input name="group_name" placeholder="Optional group">
-          <textarea name="notes" placeholder="Why track this item?"></textarea>
-          <button>Create Watchlist Item</button>
+          <input name="group_name" placeholder="{escape(_text(request, 'page.watchlist.placeholder.group'))}">
+          <textarea name="notes" placeholder="{escape(_text(request, 'page.watchlist.placeholder.notes'))}"></textarea>
+          <button>{escape(_text(request, "page.watchlist.create"))}</button>
         </form>
       </section>
-      <section class="stack">{''.join(rows) or "<div class='card'>No watchlist items yet.</div>"}</section>
+      <section class="stack">{''.join(rows) or f"<div class='card'>{escape(_text(request, 'page.watchlist.empty'))}</div>"}</section>
     </div>
     """
-    return _layout("Watchlist", body, message=message)
+    return _layout(request, _text(request, "page.watchlist.title"), body, message=message)
 
 
 @router.post("/web/watchlist")
@@ -977,14 +1010,14 @@ async def set_watchlist_status(item_id: str, request: Request) -> RedirectRespon
 
 
 @router.get("/web/ask")
-async def ask_page(message: str | None = None) -> HTMLResponse:
+async def ask_page(request: Request, message: str | None = None) -> HTMLResponse:
     providers = [
         provider
         for provider in service.list_ai_providers()
         if provider.is_enabled and "qa" in provider.supported_tasks
     ]
     history = service.list_qa_history()[:10]
-    provider_options = ["<option value=''>Default provider</option>"]
+    provider_options = [f"<option value=''>{escape(_text(request, 'page.ask.default_provider'))}</option>"]
     for provider in providers:
         provider_options.append(
             f"<option value='{escape(provider.id)}'>{escape(provider.name)} - {escape(provider.model)}</option>"
@@ -993,45 +1026,41 @@ async def ask_page(message: str | None = None) -> HTMLResponse:
         f"""
         <section class='card'>
           <h2>{escape(item['question'])}</h2>
-          <div class='stack muted'>{_render_text_rows(_build_ask_metadata_rows(item, include_status=True))}</div>
+          <div class='stack muted'>{_render_text_rows(_build_ask_metadata_rows(request, item, include_status=True))}</div>
           <div class='pre'>{escape(_truncate_text(item['answer'], limit=220))}</div>
         </section>
         """
         for item in history
-    ) or "<div class='card'>No recent Q&amp;A available.</div>"
+    ) or f"<div class='card'>{escape(_text(request, 'shared.no_recent_qa'))}</div>"
     body = f"""
     <div class="grid cols-2">
       <section class="card">
-        <h2>Ask from Local Knowledge</h2>
+        <h2>{escape(_text(request, "page.ask.form_title"))}</h2>
         <form method="post" action="/web/ask">
-          <textarea name="question" placeholder="What changed in AI coding tools this week?" required></textarea>
+          <textarea name="question" placeholder="{escape(_text(request, 'page.ask.placeholder.question'))}" required></textarea>
           <select name="provider_id">{''.join(provider_options)}</select>
-          <button>Ask</button>
+          <button>{escape(_text(request, "page.ask.ask_button"))}</button>
         </form>
-        <p class="muted">Retrieval-first flow: local knowledge is searched first. External AI is optional and may only reason over the retrieved local evidence.</p>
+        <p class="muted">{escape(_text(request, "page.ask.retrieval_note"))}</p>
       </section>
       <section class="stack">{history_html}</section>
     </div>
     """
-    return _layout("Ask / Q&A", body, message=message)
+    return _layout(request, _text(request, "page.ask.title"), body, message=message)
 
 
 @router.post("/web/ask")
 async def ask_submit(request: Request) -> HTMLResponse:
     form = await _read_form(request)
     result = service.ask_question(question=form.get("question", ""), provider_id=form.get("provider_id", ""))
-    status_label, status_message = _build_ask_status(result)
-    status_class = "ask-status"
-    if status_label == "fallback warning":
-        status_class = "ask-status warning"
-    elif status_label == "incomplete":
-        status_class = "ask-status incomplete"
-    run_metadata_html = _render_text_rows(_build_ask_metadata_rows(result, include_status=True))
+    status_label, status_message = _build_ask_status(request, result)
+    status_class = _ask_status_class(result)
+    run_metadata_html = _render_text_rows(_build_ask_metadata_rows(request, result, include_status=True))
     error_html = ""
     if str(result.get("error") or "").strip():
         error_html = f"""
         <section class="ask-section">
-          <h2>Error State</h2>
+          <h2>{escape(_text(request, "page.ask.error_state"))}</h2>
           <div class="pre">{escape(str(result.get("error") or ""))}</div>
         </section>
         """
@@ -1039,57 +1068,57 @@ async def ask_submit(request: Request) -> HTMLResponse:
     <div class="grid cols-2">
       <section class="card">
         <div class="{status_class}" style="margin-bottom:14px;">
-          <strong>Status: {escape(status_label)}</strong>
+          <strong>{escape(_text(request, "page.ask.status"))}: {escape(status_label)}</strong>
           <div class="muted">{escape(status_message)}</div>
         </div>
         <section class="ask-section">
-          <h2>Question</h2>
+          <h2>{escape(_text(request, "page.ask.question"))}</h2>
           <div class="pre">{escape(result['question'])}</div>
         </section>
         <section class="ask-section">
-          <h2>Answer</h2>
+          <h2>{escape(_text(request, "page.ask.answer"))}</h2>
           <div class="pre">{escape(result['answer'])}</div>
         </section>
         <section class="ask-section">
-          <h2>Run Details</h2>
+          <h2>{escape(_text(request, "page.ask.run_details"))}</h2>
           <div class="stack">{run_metadata_html}</div>
         </section>
         {error_html}
       </section>
       <div class="stack">
         <section class="card">
-          <h2>Evidence</h2>
-          <div class="compact-list">{_render_ask_evidence(result.get("evidence"))}</div>
+          <h2>{escape(_text(request, "page.ask.evidence"))}</h2>
+          <div class="compact-list">{_render_ask_evidence(request, result.get("evidence"))}</div>
         </section>
         <section class="card">
-          <h2>Opportunities</h2>
-          {_render_structured_list(result.get("opportunities"), empty_message="No reviewed opportunities available for this answer.")}
+          <h2>{escape(_text(request, "page.ask.opportunities"))}</h2>
+          {_render_structured_list(result.get("opportunities"), empty_message=_text(request, "page.ask.empty.opportunities"))}
         </section>
         <section class="card">
-          <h2>Risks</h2>
-          {_render_structured_list(result.get("risks"), empty_message="No reviewed risks available for this answer.")}
+          <h2>{escape(_text(request, "page.ask.risks"))}</h2>
+          {_render_structured_list(result.get("risks"), empty_message=_text(request, "page.ask.empty.risks"))}
         </section>
         <section class="card">
-          <h2>Uncertainties</h2>
-          {_render_structured_list(result.get("uncertainties"), empty_message="No reviewed uncertainties available for this answer.")}
+          <h2>{escape(_text(request, "page.ask.uncertainties"))}</h2>
+          {_render_structured_list(result.get("uncertainties"), empty_message=_text(request, "page.ask.empty.uncertainties"))}
         </section>
         <section class="card">
-          <h2>Related Topics</h2>
-          {_render_structured_list(result.get("related_topics"), empty_message="No related topics available for this answer.")}
+          <h2>{escape(_text(request, "page.ask.related_topics"))}</h2>
+          {_render_structured_list(result.get("related_topics"), empty_message=_text(request, "page.ask.empty.related_topics"))}
         </section>
         <section class="card">
-          <h2>Meta</h2>
-          {_render_meta_section(result.get("meta"))}
-          <div class="inline"><a href="/web/ask">Back to Ask</a></div>
+          <h2>{escape(_text(request, "page.ask.meta"))}</h2>
+          {_render_meta_section(request, result.get("meta"))}
+          <div class="inline"><a href="/web/ask">{escape(_text(request, "page.ask.back"))}</a></div>
         </section>
       </div>
     </div>
     """
-    return _layout("Ask Result", body)
+    return _layout(request, _text(request, "page.ask.title"), body)
 
 
 @router.get("/web/ai-settings")
-async def ai_settings_page(message: str | None = None) -> HTMLResponse:
+async def ai_settings_page(request: Request, message: str | None = None) -> HTMLResponse:
     providers = service.list_ai_providers()
     task_values = service.list_ai_task_values()
     rows = "".join(
@@ -1097,10 +1126,10 @@ async def ai_settings_page(message: str | None = None) -> HTMLResponse:
         f"<td>{escape(provider.model)}</td><td>{escape(provider.masked_key)}</td><td>{escape(str(provider.is_default))}</td>"
         f"<td>{escape(str(provider.is_enabled))}</td><td>{escape(', '.join(provider.supported_tasks))}</td>"
         f"<td>{escape(provider.last_test_status or '-')}</td>"
-        f"<td><a class='nav-link' href='/web/ai-settings/{provider.id}'>Edit</a> "
-        f"<form class='inline' method='post' action='/web/ai-settings/{provider.id}/test'><button>Test</button></form></td></tr>"
+        f"<td><a class='nav-link' href='/web/ai-settings/{provider.id}'>{escape(_text(request, 'page.ai_settings.action.edit'))}</a> "
+        f"<form class='inline' method='post' action='/web/ai-settings/{provider.id}/test'><button>{escape(_text(request, 'page.ai_settings.action.test'))}</button></form></td></tr>"
         for provider in providers
-    ) or "<tr><td colspan='10'>No AI provider configured.</td></tr>"
+    ) or _empty_table_row(_text(request, "page.ai_settings.no_providers"), colspan=10)
     task_inputs = "".join(
         f"<label><input type='checkbox' name='task_{escape(task)}' checked> {escape(task)}</label>"
         for task in task_values
@@ -1108,34 +1137,34 @@ async def ai_settings_page(message: str | None = None) -> HTMLResponse:
     body = f"""
     <div class="grid cols-2">
       <section class="card">
-        <h2>Save Provider</h2>
-        <p class="muted">Local configuration stays in this machine. Ask uses explicit provider selection first, otherwise the enabled default provider that supports Q&amp;A.</p>
+        <h2>{escape(_text(request, "page.ai_settings.save_provider"))}</h2>
+        <p class="muted">{escape(_text(request, "page.ai_settings.intro"))}</p>
         <form method="post" action="/web/ai-settings">
-          <input name="name" placeholder="Provider name" required>
+          <input name="name" placeholder="{escape(_text(request, 'page.ai_settings.placeholder.name'))}" required>
           <input name="provider_type" value="openai_compatible">
           <input name="base_url" value="https://api.openai.com/v1">
-          <input name="model" placeholder="gpt-4o-mini / custom model" required>
-          <input name="api_key" placeholder="API key" required>
+          <input name="model" placeholder="{escape(_text(request, 'page.ai_settings.placeholder.model'))}" required>
+          <input name="api_key" placeholder="{escape(_text(request, 'page.ai_settings.placeholder.api_key'))}" required>
           <div class="stack">
-            <strong>Supported tasks</strong>
+            <strong>{escape(_text(request, "page.ai_settings.supported_tasks"))}</strong>
             <div class="chips">{task_inputs}</div>
           </div>
-          <textarea name="notes" placeholder="Notes, fallback intent, cost preference"></textarea>
-          <label><input type="checkbox" name="is_enabled" checked> enabled</label>
-          <label><input type="checkbox" name="is_default"> default provider</label>
-          <button>Save Provider</button>
+          <textarea name="notes" placeholder="{escape(_text(request, 'page.ai_settings.placeholder.notes'))}"></textarea>
+          <label><input type="checkbox" name="is_enabled" checked> {escape(_text(request, "page.ai_settings.enabled"))}</label>
+          <label><input type="checkbox" name="is_default"> {escape(_text(request, "page.ai_settings.default_provider"))}</label>
+          <button>{escape(_text(request, "page.ai_settings.save_provider"))}</button>
         </form>
       </section>
       <section class="card">
-        <h2>Configured Providers</h2>
+        <h2>{escape(_text(request, "page.ai_settings.configured_providers"))}</h2>
         <table>
-          <thead><tr><th>Name</th><th>Type</th><th>Base URL</th><th>Model</th><th>Key</th><th>Default</th><th>Enabled</th><th>Tasks</th><th>Status</th><th>Actions</th></tr></thead>
+          <thead><tr><th>{escape(_text(request, "page.ai_settings.col.name"))}</th><th>{escape(_text(request, "page.ai_settings.col.type"))}</th><th>{escape(_text(request, "page.ai_settings.col.base_url"))}</th><th>{escape(_text(request, "page.ai_settings.col.model"))}</th><th>{escape(_text(request, "page.ai_settings.col.key"))}</th><th>{escape(_text(request, "page.ai_settings.col.default"))}</th><th>{escape(_text(request, "page.ai_settings.col.enabled"))}</th><th>{escape(_text(request, "page.ai_settings.col.tasks"))}</th><th>{escape(_text(request, "page.ai_settings.col.status"))}</th><th>{escape(_text(request, "page.ai_settings.col.actions"))}</th></tr></thead>
           <tbody>{rows}</tbody>
         </table>
       </section>
     </div>
     """
-    return _layout("AI Settings", body, message=message)
+    return _layout(request, _text(request, "page.ai_settings.title"), body, message=message)
 
 
 @router.post("/web/ai-settings")
@@ -1145,11 +1174,11 @@ async def save_ai_settings(request: Request) -> RedirectResponse:
 
 
 @router.get("/web/ai-settings/{provider_id}")
-async def ai_provider_detail(provider_id: str, message: str | None = None) -> HTMLResponse:
+async def ai_provider_detail(request: Request, provider_id: str, message: str | None = None) -> HTMLResponse:
     provider = service.get_ai_provider(provider_id)
     if provider is None:
-        body = "<div class='card'>AI provider not found.</div>"
-        return _layout("AI Provider Detail", body, message=message)
+        body = f"<div class='card'>{escape(_text(request, 'page.ai_settings.not_found'))}</div>"
+        return _layout(request, _text(request, "page.ai_settings.title"), body, message=message)
 
     task_inputs = "".join(
         f"<label><input type='checkbox' name='task_{escape(task)}' {'checked' if task in provider.supported_tasks else ''}> {escape(task)}</label>"
@@ -1158,38 +1187,38 @@ async def ai_provider_detail(provider_id: str, message: str | None = None) -> HT
     body = f"""
     <div class="grid cols-2">
       <section class="card">
-        <h2>Edit Provider</h2>
+        <h2>{escape(_text(request, "page.ai_settings.edit_provider"))}</h2>
         <form method="post" action="/web/ai-settings">
           <input type="hidden" name="provider_id" value="{escape(provider.id)}">
           <input name="name" value="{escape(provider.name)}" required>
           <input name="provider_type" value="{escape(provider.provider_type)}">
           <input name="base_url" value="{escape(provider.base_url)}">
           <input name="model" value="{escape(provider.model)}" required>
-          <input name="api_key" placeholder="Leave blank to keep current saved key">
+          <input name="api_key" placeholder="{escape(_text(request, 'page.ai_settings.placeholder.keep_key'))}">
           <div class="stack">
-            <strong>Supported tasks</strong>
+            <strong>{escape(_text(request, "page.ai_settings.supported_tasks"))}</strong>
             <div class="chips">{task_inputs}</div>
           </div>
-          <textarea name="notes" placeholder="Notes">{escape(provider.notes)}</textarea>
-          <label><input type="checkbox" name="is_enabled" {'checked' if provider.is_enabled else ''}> enabled</label>
-          <label><input type="checkbox" name="is_default" {'checked' if provider.is_default else ''}> default provider</label>
-          <button>Save Provider</button>
+          <textarea name="notes" placeholder="{escape(_text(request, 'page.ai_settings.label.notes'))}">{escape(provider.notes)}</textarea>
+          <label><input type="checkbox" name="is_enabled" {'checked' if provider.is_enabled else ''}> {escape(_text(request, "page.ai_settings.enabled"))}</label>
+          <label><input type="checkbox" name="is_default" {'checked' if provider.is_default else ''}> {escape(_text(request, "page.ai_settings.default_provider"))}</label>
+          <button>{escape(_text(request, "page.ai_settings.save_provider"))}</button>
         </form>
       </section>
       <section class="card stack">
-        <div><strong>Supported tasks:</strong> {escape(', '.join(provider.supported_tasks))}</div>
-        <div><strong>Saved key:</strong> {escape(provider.masked_key or '-')}</div>
-        <div><strong>Last test status:</strong> {escape(provider.last_test_status or '-')}</div>
-        <div><strong>Last test message:</strong><div class="pre">{escape(provider.last_test_message or '-')}</div></div>
-        <div><strong>Notes:</strong><div class="pre">{escape(provider.notes or '-')}</div></div>
+        <div><strong>{escape(_text(request, "page.ai_settings.label.supported_tasks"))}:</strong> {escape(', '.join(provider.supported_tasks))}</div>
+        <div><strong>{escape(_text(request, "page.ai_settings.label.saved_key"))}:</strong> {escape(provider.masked_key or '-')}</div>
+        <div><strong>{escape(_text(request, "page.ai_settings.label.last_test_status"))}:</strong> {escape(provider.last_test_status or '-')}</div>
+        <div><strong>{escape(_text(request, "page.ai_settings.label.last_test_message"))}:</strong><div class="pre">{escape(provider.last_test_message or '-')}</div></div>
+        <div><strong>{escape(_text(request, "page.ai_settings.label.notes"))}:</strong><div class="pre">{escape(provider.notes or '-')}</div></div>
         <div class="inline">
-          <form class='inline' method='post' action='/web/ai-settings/{provider.id}/test'><button>Test Provider</button></form>
-          <a href="/web/ai-settings">Back to AI Settings</a>
+          <form class='inline' method='post' action='/web/ai-settings/{provider.id}/test'><button>{escape(_text(request, "page.ai_settings.action.test_provider"))}</button></form>
+          <a href="/web/ai-settings">{escape(_text(request, "page.ai_settings.action.back"))}</a>
         </div>
       </section>
     </div>
     """
-    return _layout("AI Provider Detail", body, message=message)
+    return _layout(request, _text(request, "page.ai_settings.title"), body, message=message)
 
 
 @router.post("/web/ai-settings/{provider_id}/test")
@@ -1199,40 +1228,40 @@ async def test_ai_provider(provider_id: str) -> RedirectResponse:
 
 
 @router.get("/web/system")
-async def system_page(message: str | None = None) -> HTMLResponse:
+async def system_page(request: Request, message: str | None = None) -> HTMLResponse:
     status = service.get_system_page_data()
     checks_html = "".join(
         f"<div><strong>{escape(item['label'])}:</strong> {escape(item['status'])}</div>"
         f"<div class='muted'>{escape(item['detail'])}</div>"
         for item in status["checks"]
-    ) or "<div class='muted'>No system checks available.</div>"
+    ) or f"<div class='muted'>{escape(_text(request, 'page.system.no_checks'))}</div>"
     file_rows = "".join(
         f"<tr><td>{escape(item['path'])}</td><td>{escape(item['exists_label'])}</td><td>{item['size_bytes']}</td></tr>"
         for item in status["storage_files"]
     )
     count_rows = "".join(
         f"<tr><td>{escape(item['name'])}</td><td>{item['count']}</td></tr>" for item in status["database_counts"]
-    ) or "<tr><td colspan='2'>No database counts available.</td></tr>"
-    file_rows = file_rows or "<tr><td colspan='3'>No storage files available.</td></tr>"
-    note_html = _render_database_note(status.get("counts_error"))
+    ) or f"<tr><td colspan='2'>{escape(_text(request, 'shared.no_database_counts'))}</td></tr>"
+    file_rows = file_rows or f"<tr><td colspan='3'>{escape(_text(request, 'shared.no_storage_files'))}</td></tr>"
+    note_html = _render_database_note(request, status.get("counts_error"))
     body = f"""
     {note_html}
     <div class="grid cols-2">
       <section class="card stack">
-        <h2>System Checks</h2>
+        <h2>{escape(_text(request, "page.system.checks"))}</h2>
         {checks_html}
       </section>
       <section class="card">
-        <h2>Database Counts</h2>
+        <h2>{escape(_text(request, "page.system.database_counts"))}</h2>
         <table><tbody>{count_rows}</tbody></table>
       </section>
       <section class="card">
-        <h2>Storage Files</h2>
+        <h2>{escape(_text(request, "page.system.storage_files"))}</h2>
         <table>
-          <thead><tr><th>Path</th><th>Exists</th><th>Size (bytes)</th></tr></thead>
+          <thead><tr><th>{escape(_text(request, "page.system.col.path"))}</th><th>{escape(_text(request, "page.system.col.exists"))}</th><th>{escape(_text(request, "page.system.col.size_bytes"))}</th></tr></thead>
           <tbody>{file_rows}</tbody>
         </table>
       </section>
     </div>
     """
-    return _layout("System / Storage", body, message=message)
+    return _layout(request, _text(request, "page.system.title"), body, message=message)

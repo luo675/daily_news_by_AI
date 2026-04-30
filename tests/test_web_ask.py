@@ -300,14 +300,14 @@ def test_ask_page_renders_history_and_local_evidence_note(monkeypatch, workspace
     response = client.get("/web/ask")
 
     assert response.status_code == 200
-    assert "Ask from Local Knowledge" in response.text
-    assert "may only reason over the retrieved local evidence" in response.text
+    assert "基于本地知识提问" in response.text
+    assert "只能基于检索出的本地证据进行推理" in response.text
     assert "Multiple local evidence items matched the question." in response.text
-    assert "Status: local answer" in response.text
-    assert "Provider: default/local only" in response.text
-    assert "Created: 2026-04-28T09:30:00+00:00" in response.text
-    assert "Evidence: 1 item" in response.text
-    assert "Match: summary" in response.text
+    assert "状态: 本地回答" in response.text
+    assert "服务商: 默认 / 仅本地" in response.text
+    assert "创建时间: 2026-04-28T09:30:00+00:00" in response.text
+    assert "证据: 1 条" in response.text
+    assert "匹配: summary" in response.text
 
 
 def test_ask_submit_renders_answer_mode_and_note(monkeypatch, workspace_tmp_path: Path) -> None:
@@ -342,11 +342,11 @@ def test_ask_submit_renders_answer_mode_and_note(monkeypatch, workspace_tmp_path
     )
 
     assert response.status_code == 200
-    assert "Status: bounded external reasoning" in response.text
-    assert "Mode: local_with_external_reasoning" in response.text
-    assert "Provider: Local QA Provider" in response.text
-    assert "Created: 2026-04-28T10:00:00+00:00" in response.text
-    assert "Evidence: 1 item" in response.text
+    assert "状态: 受限外部推理" in response.text
+    assert "模式: local_with_external_reasoning" in response.text
+    assert "服务商: Local QA Provider" in response.text
+    assert "创建时间: 2026-04-28T10:00:00+00:00" in response.text
+    assert "证据: 1 条" in response.text
     assert "A focused local summary/key-point match was found." in response.text
     assert "Bounded answer from local evidence." in response.text
 
@@ -396,23 +396,48 @@ def test_ask_submit_renders_structured_result_sections_and_status(monkeypatch, w
     )
 
     assert response.status_code == 200
-    assert "Status: fallback warning" in response.text
-    assert "Showing local answer because the external provider failed." in response.text
-    assert "Run Details" in response.text
-    assert "Mode: local_fallback" in response.text
-    assert "Provider: Local QA Provider" in response.text
-    assert "Created: 2026-04-28T01:02:03+00:00" in response.text
-    assert "Evidence: 2 items" in response.text
-    assert "Evidence" in response.text
-    assert "Source: document" in response.text
-    assert "Source: brief" in response.text
-    assert "Match: key_point" in response.text
-    assert "Match: summary" in response.text
-    assert "Opportunities" in response.text
-    assert "Risks" in response.text
-    assert "Uncertainties" in response.text
-    assert "Related Topics" in response.text
-    assert "Meta" in response.text
+    assert "状态: 回退警告" in response.text
+    assert "外部服务商失败，因此展示本地回答。" in response.text
+    assert "运行详情" in response.text
+    assert "模式: local_fallback" in response.text
+    assert "服务商: Local QA Provider" in response.text
+    assert "创建时间: 2026-04-28T01:02:03+00:00" in response.text
+    assert "证据: 2 条" in response.text
+    assert "证据" in response.text
+    assert "来源: document" in response.text
+    assert "来源: brief" in response.text
+    assert "匹配: key_point" in response.text
+    assert "匹配: summary" in response.text
+    assert "机会" in response.text
+    assert "风险" in response.text
+    assert "不确定性" in response.text
+    assert "相关主题" in response.text
+    assert "元数据" in response.text
+
+
+def test_ask_submit_warning_class_uses_answer_mode_not_status_label(
+    monkeypatch,
+    workspace_tmp_path: Path,
+) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    monkeypatch.setattr(
+        web_routes.service,
+        "ask_question",
+        lambda question, provider_id="": {
+            "question": question,
+            "answer": "Fallback answer body.",
+            "answer_mode": "local_fallback",
+            "evidence": [],
+        },
+    )
+    monkeypatch.setattr(web_routes, "_build_ask_status", lambda request, result: ("custom warning label", "custom detail"))
+
+    client = TestClient(create_app())
+    response = client.post("/web/ask", data={"question": "What changed?", "provider_id": ""})
+
+    assert response.status_code == 200
+    assert 'class="ask-status warning"' in response.text
+    assert "custom warning label" in response.text
 
 
 def test_ask_submit_handles_empty_and_missing_fields_without_document_links(
@@ -436,9 +461,7 @@ def test_ask_submit_handles_empty_and_missing_fields_without_document_links(
                     "summary": "Brief-only reviewed evidence.",
                     "document_id": None,
                 },
-                {
-                    "title": "Untitled evidence",
-                },
+                {},
             ],
             "opportunities": [],
             "risks": None,
@@ -455,15 +478,72 @@ def test_ask_submit_handles_empty_and_missing_fields_without_document_links(
     )
 
     assert response.status_code == 200
-    assert "Status: incomplete" in response.text
+    assert "状态: 证据不足" in response.text
     assert "Brief-only reviewed evidence." in response.text
-    assert "Untitled evidence" in response.text
+    assert "未命名证据" in response.text
+    assert "暂无片段。" in response.text
+    assert "Untitled evidence" not in response.text
+    assert "No snippet available." not in response.text
     assert "/web/documents/" not in response.text
-    assert "No reviewed opportunities available for this answer." in response.text
-    assert "No reviewed risks available for this answer." in response.text
-    assert "No reviewed uncertainties available for this answer." in response.text
-    assert "No related topics available for this answer." in response.text
-    assert "No metadata available." in response.text
+    assert "该回答暂无已审阅机会。" in response.text
+    assert "该回答暂无已审阅风险。" in response.text
+    assert "该回答暂无已审阅不确定性。" in response.text
+    assert "该回答暂无相关主题。" in response.text
+    assert "暂无元数据。" in response.text
+
+
+def test_ask_submit_incomplete_class_uses_answer_mode_not_status_label(
+    monkeypatch,
+    workspace_tmp_path: Path,
+) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    monkeypatch.setattr(
+        web_routes.service,
+        "ask_question",
+        lambda question, provider_id="": {
+            "question": question,
+            "answer": "Incomplete answer body.",
+            "answer_mode": "insufficient_local_evidence",
+            "evidence": [],
+        },
+    )
+    monkeypatch.setattr(web_routes, "_build_ask_status", lambda request, result: ("custom incomplete label", "custom detail"))
+
+    client = TestClient(create_app())
+    response = client.post("/web/ask", data={"question": "What changed?", "provider_id": ""})
+
+    assert response.status_code == 200
+    assert 'class="ask-status incomplete"' in response.text
+    assert "custom incomplete label" in response.text
+
+
+def test_ask_submit_renders_english_fallback_evidence_shell_when_lang_query_requests_en(
+    monkeypatch,
+    workspace_tmp_path: Path,
+) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    monkeypatch.setattr(
+        web_routes.service,
+        "ask_question",
+        lambda question, provider_id="": {
+            "question": question,
+            "answer": "Bounded answer from local evidence.",
+            "answer_mode": "local_only",
+            "evidence": [{}],
+        },
+    )
+
+    client = TestClient(create_app())
+    response = client.post(
+        "/web/ask?lang=en",
+        data={"question": "What changed?", "provider_id": ""},
+    )
+
+    assert response.status_code == 200
+    assert "Untitled evidence" in response.text
+    assert "No snippet available." in response.text
+    assert "未命名证据" not in response.text
+    assert "暂无片段。" not in response.text
 
 
 def test_ask_submit_renders_with_minimal_required_contract_fields(
@@ -488,15 +568,15 @@ def test_ask_submit_renders_with_minimal_required_contract_fields(
 
     assert response.status_code == 200
     assert "Minimal answer body." in response.text
-    assert "Status: local answer" in response.text
-    assert "Mode: local_only" in response.text
-    assert "Provider: default/local only" in response.text
-    assert "No evidence available for this answer." in response.text
-    assert "No reviewed opportunities available for this answer." in response.text
-    assert "No reviewed risks available for this answer." in response.text
-    assert "No reviewed uncertainties available for this answer." in response.text
-    assert "No related topics available for this answer." in response.text
-    assert "No metadata available." in response.text
+    assert "状态: 本地回答" in response.text
+    assert "模式: local_only" in response.text
+    assert "服务商: 默认 / 仅本地" in response.text
+    assert "该回答暂无可用证据。" in response.text
+    assert "该回答暂无已审阅机会。" in response.text
+    assert "该回答暂无已审阅风险。" in response.text
+    assert "该回答暂无已审阅不确定性。" in response.text
+    assert "该回答暂无相关主题。" in response.text
+    assert "暂无元数据。" in response.text
     assert "Error State" not in response.text
 
 
@@ -1228,7 +1308,23 @@ def test_ask_page_renders_shared_empty_history_language(monkeypatch, workspace_t
     response = client.get("/web/ask")
 
     assert response.status_code == 200
+    assert "暂无最近问答。" in response.text
+
+
+def test_ask_page_uses_english_shell_copy_when_lang_query_requests_en(monkeypatch, workspace_tmp_path: Path) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    monkeypatch.setattr(web_routes.service, "list_ai_providers", lambda: [])
+    monkeypatch.setattr(web_routes.service, "list_qa_history", lambda: [])
+
+    client = TestClient(create_app())
+    response = client.get("/web/ask?lang=en")
+
+    assert response.status_code == 200
+    assert "Ask from Local Knowledge" in response.text
+    assert "Default provider" in response.text
+    assert "Ask" in response.text
     assert "No recent Q&amp;A available." in response.text
+    assert "基于本地知识提问" not in response.text
 
 
 def test_ai_provider_edit_page_hides_plaintext_key(monkeypatch, workspace_tmp_path: Path) -> None:
@@ -1241,7 +1337,7 @@ def test_ai_provider_edit_page_hides_plaintext_key(monkeypatch, workspace_tmp_pa
 
     assert response.status_code == 200
     assert 'value="secret-key"' not in response.text
-    assert "Leave blank to keep current saved key" in response.text
+    assert "留空则保留当前已保存 key" in response.text
     assert provider.masked_key in response.text
 
 
