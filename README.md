@@ -309,6 +309,32 @@ What this means in practice:
 
 For the latest handoff status and the most reasonable next-session starting point, always prefer [ARCH_CONTEXT.md](./ARCH_CONTEXT.md).
 
+## Latest Status Update (2026-05-01 AI Settings / Browser Smoke)
+
+This section supplements the older update above.
+
+- AI Settings now has an explicit page contract in [docs/web_page_contract.md](./docs/web_page_contract.md).
+- `/web/ai-settings` and `/web/ai-settings/{provider_id}` preserve the current `lang` context across list, detail, save, test, and back-to-list flows.
+- AI Settings page rendering is bounded to `provider.masked_key`; raw `api_key` must not be interpolated into HTML.
+- AI provider config remains `DB-first + JSON fallback`.
+- This work does not change Ask provider routing, provider storage semantics, or secrets management.
+- A manual browser smoke checklist was added at [docs/web_browser_smoke_checklist.md](./docs/web_browser_smoke_checklist.md).
+- The browser checklist covers the current Web MVP pages and distinguishes:
+  - route-level smoke
+  - manual browser smoke
+  - real DB / integration verification
+- The browser checklist is documentation only and has not been run yet.
+- Targeted verification for the AI Settings route/page changes was run with:
+  - `pytest tests/test_web_mvp_acceptance.py tests/test_web_ask.py -q` with `48 passed`
+
+What this means in practice:
+
+- AI Settings contract, `lang` preservation, and masked-key rendering should not be reopened as default next tasks.
+- Browser smoke should not be described as full E2E or real DB/integration verification.
+- If stronger confidence is needed, run the manual browser checklist and record the pass result before adding automation.
+
+For the latest handoff status and the most reasonable next-session starting point, always prefer [ARCH_CONTEXT.md](./ARCH_CONTEXT.md).
+
 ## Latest Status Update (2026-04-30)
 
 This section supplements the older update above.

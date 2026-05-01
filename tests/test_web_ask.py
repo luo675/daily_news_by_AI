@@ -1339,6 +1339,25 @@ def test_ai_provider_edit_page_hides_plaintext_key(monkeypatch, workspace_tmp_pa
     assert 'value="secret-key"' not in response.text
     assert "留空则保留当前已保存 key" in response.text
     assert provider.masked_key in response.text
+    assert "/web/ai-settings?lang=zh" in response.text
+    assert "/web/ai-settings/provider-1/test?lang=zh" in response.text
+
+
+def test_ai_provider_edit_page_hides_plaintext_key_in_english(monkeypatch, workspace_tmp_path: Path) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    provider = _build_provider()
+    monkeypatch.setattr(web_routes.service, "get_ai_provider", lambda provider_id: provider)
+
+    client = TestClient(create_app())
+    response = client.get("/web/ai-settings/provider-1?lang=en")
+
+    assert response.status_code == 200
+    assert 'value="secret-key"' not in response.text
+    assert "Leave blank to keep current saved key" in response.text
+    assert provider.masked_key in response.text
+    assert "/web/ai-settings?lang=en" in response.text
+    assert "/web/ai-settings/provider-1/test?lang=en" in response.text
+    assert "Back to AI Settings" in response.text
 
 
 def test_list_ai_providers_reads_from_db(monkeypatch, workspace_tmp_path: Path) -> None:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from html import escape
-from urllib.parse import parse_qs, urlencode
+from urllib.parse import parse_qs, parse_qsl, urlencode, urlsplit, urlunsplit
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -74,6 +74,14 @@ def _review_context_query(request: Request) -> list[tuple[str, str]]:
 
 def _review_form_action(request: Request, target: str) -> str:
     return f"{target}?{urlencode(_review_context_query(request))}"
+
+
+def _ai_settings_context_query(request: Request) -> list[tuple[str, str]]:
+    return [("lang", _i18n(request).lang)]
+
+
+def _ai_settings_url(request: Request, target: str) -> str:
+    return f"{target}?{urlencode(_ai_settings_context_query(request))}"
 
 
 async def _read_form(request: Request) -> dict[str, str]:
@@ -475,8 +483,11 @@ def _layout(request: Request, title: str, body: str, message: str | None = None)
 
 
 def _redirect(target: str, message: str) -> RedirectResponse:
-    encoded = urlencode({"message": message})
-    return RedirectResponse(f"{target}?{encoded}", status_code=303)
+    parsed = urlsplit(target)
+    query = parse_qsl(parsed.query, keep_blank_values=True)
+    query.append(("message", message))
+    encoded = urlencode(query)
+    return RedirectResponse(urlunsplit((parsed.scheme, parsed.netloc, parsed.path, encoded, parsed.fragment)), status_code=303)
 
 
 def _review_redirect(request: Request, message: str) -> RedirectResponse:
@@ -1290,13 +1301,14 @@ async def ask_submit(request: Request) -> HTMLResponse:
 async def ai_settings_page(request: Request, message: str | None = None) -> HTMLResponse:
     providers = service.list_ai_providers()
     task_values = service.list_ai_task_values()
+    list_action = _ai_settings_url(request, "/web/ai-settings")
     rows = "".join(
         f"<tr><td>{escape(provider.name)}</td><td>{escape(provider.provider_type)}</td><td>{escape(provider.base_url)}</td>"
         f"<td>{escape(provider.model)}</td><td>{escape(provider.masked_key)}</td><td>{escape(str(provider.is_default))}</td>"
         f"<td>{escape(str(provider.is_enabled))}</td><td>{escape(', '.join(provider.supported_tasks))}</td>"
         f"<td>{escape(provider.last_test_status or '-')}</td>"
-        f"<td><a class='nav-link' href='/web/ai-settings/{provider.id}'>{escape(_text(request, 'page.ai_settings.action.edit'))}</a> "
-        f"<form class='inline' method='post' action='/web/ai-settings/{provider.id}/test'><button>{escape(_text(request, 'page.ai_settings.action.test'))}</button></form></td></tr>"
+        f"<td><a class='nav-link' href='{escape(_ai_settings_url(request, f'/web/ai-settings/{provider.id}'))}'>{escape(_text(request, 'page.ai_settings.action.edit'))}</a> "
+        f"<form class='inline' method='post' action='{escape(_ai_settings_url(request, f'/web/ai-settings/{provider.id}/test'))}'><button>{escape(_text(request, 'page.ai_settings.action.test'))}</button></form></td></tr>"
         for provider in providers
     ) or _empty_table_row(_text(request, "page.ai_settings.no_providers"), colspan=10)
     task_inputs = "".join(
@@ -1308,7 +1320,7 @@ async def ai_settings_page(request: Request, message: str | None = None) -> HTML
       <section class="card">
         <h2>{escape(_text(request, "page.ai_settings.save_provider"))}</h2>
         <p class="muted">{escape(_text(request, "page.ai_settings.intro"))}</p>
-        <form method="post" action="/web/ai-settings">
+        <form method="post" action="{escape(list_action)}">
           <input name="name" placeholder="{escape(_text(request, 'page.ai_settings.placeholder.name'))}" required>
           <input name="provider_type" value="openai_compatible">
           <input name="base_url" value="https://api.openai.com/v1">
@@ -1339,7 +1351,7 @@ async def ai_settings_page(request: Request, message: str | None = None) -> HTML
 @router.post("/web/ai-settings")
 async def save_ai_settings(request: Request) -> RedirectResponse:
     message = service.save_ai_provider(await _read_form(request))
-    return _redirect("/web/ai-settings", message)
+    return _redirect(_ai_settings_url(request, "/web/ai-settings"), message)
 
 
 @router.get("/web/ai-settings/{provider_id}")
@@ -1349,6 +1361,7 @@ async def ai_provider_detail(request: Request, provider_id: str, message: str | 
         body = f"<div class='card'>{escape(_text(request, 'page.ai_settings.not_found'))}</div>"
         return _layout(request, _text(request, "page.ai_settings.title"), body, message=message)
 
+    list_action = _ai_settings_url(request, "/web/ai-settings")
     task_inputs = "".join(
         f"<label><input type='checkbox' name='task_{escape(task)}' {'checked' if task in provider.supported_tasks else ''}> {escape(task)}</label>"
         for task in service.list_ai_task_values()
@@ -1357,7 +1370,7 @@ async def ai_provider_detail(request: Request, provider_id: str, message: str | 
     <div class="grid cols-2">
       <section class="card">
         <h2>{escape(_text(request, "page.ai_settings.edit_provider"))}</h2>
-        <form method="post" action="/web/ai-settings">
+        <form method="post" action="{escape(list_action)}">
           <input type="hidden" name="provider_id" value="{escape(provider.id)}">
           <input name="name" value="{escape(provider.name)}" required>
           <input name="provider_type" value="{escape(provider.provider_type)}">
@@ -1381,8 +1394,8 @@ async def ai_provider_detail(request: Request, provider_id: str, message: str | 
         <div><strong>{escape(_text(request, "page.ai_settings.label.last_test_message"))}:</strong><div class="pre">{escape(provider.last_test_message or '-')}</div></div>
         <div><strong>{escape(_text(request, "page.ai_settings.label.notes"))}:</strong><div class="pre">{escape(provider.notes or '-')}</div></div>
         <div class="inline">
-          <form class='inline' method='post' action='/web/ai-settings/{provider.id}/test'><button>{escape(_text(request, "page.ai_settings.action.test_provider"))}</button></form>
-          <a href="/web/ai-settings">{escape(_text(request, "page.ai_settings.action.back"))}</a>
+          <form class='inline' method='post' action="{escape(_ai_settings_url(request, f'/web/ai-settings/{provider.id}/test'))}"><button>{escape(_text(request, "page.ai_settings.action.test_provider"))}</button></form>
+          <a href="{escape(list_action)}">{escape(_text(request, "page.ai_settings.action.back"))}</a>
         </div>
       </section>
     </div>
@@ -1391,9 +1404,9 @@ async def ai_provider_detail(request: Request, provider_id: str, message: str | 
 
 
 @router.post("/web/ai-settings/{provider_id}/test")
-async def test_ai_provider(provider_id: str) -> RedirectResponse:
+async def test_ai_provider(provider_id: str, request: Request) -> RedirectResponse:
     message = service.test_ai_provider(provider_id)
-    return _redirect(f"/web/ai-settings/{provider_id}", message)
+    return _redirect(_ai_settings_url(request, f"/web/ai-settings/{provider_id}"), message)
 
 
 @router.get("/web/system")

@@ -1578,3 +1578,73 @@ This addendum records the directory-mode rerun and the observation-only rerun fo
 ### Updated next-session starting point
 
 If the next session is content maintenance, rerun the formal baseline in a network-enabled environment before considering deferred candidates again. If the next session is Web/product iteration, treat this maintenance pass as complete and do not reopen seed promotion or importer design. Review current-filter label and type-specific empty states are already complete and should not be reopened by default.
+
+## 17. Latest Progress Addendum (2026-05-01 AI Settings contract and browser smoke checklist)
+
+This addendum records the AI Settings page-contract pass and the new manual browser smoke checklist.
+
+### Completed in this round
+
+- `docs/web_page_contract.md` now includes an AI Settings Contract covering:
+  - `/web/ai-settings`
+  - `/web/ai-settings/{provider_id}`
+  - `POST /web/ai-settings`
+  - `POST /web/ai-settings/{provider_id}/test`
+- AI Settings list/detail/save/test language-context behavior is now explicit.
+- AI Settings list and detail pages preserve the current `lang` query for:
+  - edit links
+  - test form actions
+  - save form actions
+  - back-to-list links
+  - save/test redirects
+- AI Settings page rendering is explicitly bounded to `provider.masked_key`; raw `api_key` must not be interpolated into HTML.
+- The existing AI provider storage boundary remains unchanged:
+  - DB-first
+  - JSON fallback
+  - no automatic legacy JSON import
+  - no secrets-management redesign
+- `docs/web_browser_smoke_checklist.md` was added as a manual real-browser smoke checklist for the Web MVP.
+- The browser checklist covers:
+  - Dashboard
+  - Documents
+  - Sources
+  - Review
+  - Watchlist
+  - Ask
+  - AI Settings
+  - System
+- The browser checklist explicitly distinguishes:
+  - route-level smoke
+  - manual browser smoke
+  - real DB / integration verification
+- Data-dependent browser checks are conditional:
+  - if documents/sources/watchlist items exist, verify detail/card behavior
+  - if they do not exist, verify empty states and navigation
+
+### Verification
+
+- Targeted local verification for the AI Settings route/page changes was run with:
+  - `pytest tests/test_web_mvp_acceptance.py tests/test_web_ask.py -q`
+  - result: `48 passed`
+- Python compile check was run for the touched Web route/service modules:
+  - `python -m compileall src\api\routes\web.py src\web\service.py`
+- The browser smoke checklist itself is documentation only and records `Date of latest pass: not run yet`.
+
+### Important boundary that remains
+
+- Do not reopen AI Settings language-context or masked-key rendering as a default next task.
+- Do not treat the browser smoke checklist as Playwright automation or full end-to-end coverage.
+- Do not expand browser smoke into real provider calls, ingestion validation, business-data quality checks, or live persistence verification.
+- Do not change `src/domain/*`, `src/application/*`, or `src/processing/*` for this completed Web page-contract/checklist pass.
+- Do not change Ask provider routing or AI provider storage semantics as part of this completed task.
+
+### Updated next-session starting point
+
+If the next session is Web/product iteration:
+
+1. Treat AI Settings contract/lang/masking work as complete.
+2. Treat the manual browser smoke checklist as established but not yet executed.
+3. If confidence work is desired, run the checklist manually in a local browser and record the pass date/result in `docs/web_browser_smoke_checklist.md`.
+4. Otherwise pick a new small page-quality or workflow-efficiency task on top of the stable Web MVP baseline.
+
+If the next session is content maintenance, keep using the Section 16 rule: rerun the formal baseline in a network-enabled environment before reconsidering deferred candidates.

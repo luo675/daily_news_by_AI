@@ -13,6 +13,10 @@ This note records the current page-layer contract for the server-rendered Web MV
 - `GET /web/review`
 - `GET /web/ask`
 - `POST /web/ask` result view
+- `GET /web/ai-settings`
+- `GET /web/ai-settings/{provider_id}`
+- `POST /web/ai-settings`
+- `POST /web/ai-settings/{provider_id}/test`
 - `GET /web/system`
 
 This is a page/service assembly contract only.
@@ -259,6 +263,58 @@ Sources rendering rules:
 - detail page maintenance status and activity label must use the same contract fields shown in the list
 - the Sources page does not create a formal schema for `Source.config["_web"]`
 - the Sources page does not add source discovery, crawling, registry expansion, migrations, or new CRUD flows beyond existing edit/detail/toggle/import entry points
+
+## AI Settings Contract
+
+`WebMvpService.list_ai_providers()` returns provider items for page rendering with:
+
+- `id`
+- `name`
+- `provider_type`
+- `base_url`
+- `model`
+- `masked_key`
+- `is_default`
+- `is_enabled`
+- `supported_tasks`
+- `notes`
+- `last_test_status`
+- `last_test_message`
+- `updated_at`
+
+`WebMvpService.get_ai_provider(provider_id)` returns the same provider shape for the detail page.
+
+AI Settings list rules:
+
+- empty state: `No AI provider configured.`
+- rows show `masked_key` only; raw `api_key` must never be interpolated into HTML, even though the service layer still carries the stored key
+- the edit action links to the detail page for the same provider
+- the test action posts to the provider test endpoint
+- the table keeps the DB-first + JSON fallback storage strategy unchanged
+- if both DB and JSON data are unavailable, the page still renders the shell with the empty state
+
+AI Settings detail rules:
+
+- detail view shows the same provider fields plus:
+  - `last_test_message`
+  - read-only notes display
+- detail view shows `masked_key` only
+- the API key input remains empty and uses the existing keep-key placeholder for edits
+- not-found state: `AI provider not found.`
+
+Masking and fallback rules:
+
+- `provider.masked_key` is the only key value that may appear in the rendered page
+- blank keys render as `-`
+- if an existing provider record has a stored key, saving an edit with a blank key keeps the stored key unchanged
+- provider test automation is expected to mock `urlopen` or the service method; the page contract does not require real network access
+
+Language-context rules:
+
+- `/web/ai-settings?lang=en` renders the English shell copy
+- default Chinese pages keep Chinese shell copy
+- save, test, and back-to-list navigation should preserve the current `lang` query when available
+- redirects should retain the current page language context rather than dropping it
 
 Sources terminology:
 

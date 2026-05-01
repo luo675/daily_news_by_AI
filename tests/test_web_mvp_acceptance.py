@@ -399,7 +399,8 @@ def test_web_mvp_lang_query_renders_english_shell_for_watchlist_ai_settings_and_
     monkeypatch.setattr(web_routes.service, "list_watchlist_page_views", lambda: ([_watchlist_page_item()], None))
     monkeypatch.setattr(web_routes.service, "list_watchlist_type_values", lambda: ["company", "product"])
     monkeypatch.setattr(web_routes.service, "list_priority_values", lambda: ["high", "medium", "low"])
-    monkeypatch.setattr(web_routes.service, "list_ai_providers", lambda: [_provider_config()])
+    provider = _provider_config()
+    monkeypatch.setattr(web_routes.service, "list_ai_providers", lambda: [provider])
     monkeypatch.setattr(web_routes.service, "list_ai_task_values", lambda: ["summarization", "analysis", "qa"])
     monkeypatch.setattr(web_routes.service, "get_system_page_data", _system_payload)
 
@@ -427,12 +428,42 @@ def test_web_mvp_lang_query_renders_english_shell_for_watchlist_ai_settings_and_
     assert "Save Provider" in ai_settings_response.text
     assert "Configured Providers" in ai_settings_response.text
     assert "Supported tasks" in ai_settings_response.text
+    assert provider.masked_key in ai_settings_response.text
+    assert "secret-key" not in ai_settings_response.text
+    assert "/web/ai-settings/provider-1?lang=en" in ai_settings_response.text
+    assert "/web/ai-settings/provider-1/test?lang=en" in ai_settings_response.text
+    assert 'action="/web/ai-settings?lang=en"' in ai_settings_response.text
 
     assert system_response.status_code == 200
     assert "System Checks" in system_response.text
     assert "Path" in system_response.text
     assert "Exists" in system_response.text
     assert "Size (bytes)" in system_response.text
+
+
+def test_web_ai_settings_redirects_preserve_lang_context(monkeypatch) -> None:
+    monkeypatch.setattr(web_routes.service, "save_ai_provider", lambda form: "AI provider saved.")
+    monkeypatch.setattr(web_routes.service, "test_ai_provider", lambda provider_id: "Provider test status: valid.")
+
+    client = TestClient(create_app())
+
+    save_response = client.post(
+        "/web/ai-settings?lang=en",
+        data={"name": "Local QA Provider"},
+        follow_redirects=False,
+    )
+    test_response = client.post(
+        "/web/ai-settings/provider-1/test?lang=en",
+        follow_redirects=False,
+    )
+
+    assert save_response.status_code == 303
+    assert save_response.headers["location"].startswith("/web/ai-settings?lang=en")
+    assert "message=" in save_response.headers["location"]
+
+    assert test_response.status_code == 303
+    assert test_response.headers["location"].startswith("/web/ai-settings/provider-1?lang=en")
+    assert "message=" in test_response.headers["location"]
 
 
 def test_web_mvp_default_language_renders_chinese_shell_for_watchlist_ai_settings_and_system(monkeypatch) -> None:
