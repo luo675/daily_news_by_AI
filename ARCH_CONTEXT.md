@@ -1507,3 +1507,74 @@ Good candidates include:
 - documentation cleanup for a newly discovered page-contract gap
 
 Do not restart Documents, Dashboard, System, Sources, or Watchlist information-density work unless a concrete regression is reported.
+
+## 15. Latest Progress Addendum (2026-05-01 Review type filter pass)
+
+This addendum records a completed Review page efficiency improvement and overrides older notes that might still suggest Review type filtering is pending.
+
+### Completed in this round
+
+- `/web/review` now supports lightweight `type` filtering with these values:
+  - `all`
+  - `summary`
+  - `opportunity`
+  - `risk`
+  - `uncertainty`
+- `type=all` remains the default and preserves the existing assembled Review behavior.
+- Invalid `type` values fall back to `all`.
+- The Review page now exposes filter links at the top of the page and preserves the current `lang` query parameter.
+- Review edit form actions now preserve the current `lang` and effective `type`.
+- After saving a Review edit, the redirect returns to the same Review `lang` and effective `type` context.
+- Review current-filter label and type-specific empty states are complete.
+- This change is a Review page scanability and efficiency improvement only.
+- It does not change review override semantics.
+- It does not change save behavior or review storage shape.
+
+### Verification
+
+- Latest verification completed successfully with `126 passed`.
+
+### Important boundary that remains
+
+- Do not reopen Review override semantics or storage-model design as part of this completed task.
+- Do not add more Review filtering, sorting, or search behavior by default.
+- Do not treat this as a new review architecture or workflow refactor.
+
+### Updated next-session starting point
+
+If the next session is Web/product iteration, do not continue Review type filtering. Treat it as finished and pick the next small page-quality or workflow-efficiency task on top of the stable baseline.
+
+## 16. Latest Progress Addendum (2026-05-01 Directory-mode seed rerun)
+
+This addendum records the directory-mode rerun and the observation-only rerun for `what-openai-did`.
+
+### Completed in this round
+
+- The directory-mode seed rerun was executed with:
+  - `.\.venv\Scripts\python.exe scripts\run_application_batch.py --url-list scripts\real_seed_sources --no-persist`
+- The directory-mode rerun produced:
+  - `total=5`
+  - `succeeded=0`
+  - `failed=5`
+- Every attempted URL failed with `URLError: [WinError 10013]`.
+- The failure pattern is consistent with an environment/network restriction in the current sandboxed environment.
+- An observation-only rerun was then attempted with:
+  - `.\.venv\Scripts\python.exe scripts\run_application_batch.py --url-list scripts\real_seed_sources\trial_oneusefulthing_minimal.txt --no-persist`
+- The observation rerun also produced:
+  - `total=5`
+  - `succeeded=0`
+  - `failed=5`
+- The formal baseline definition remains 4 URLs.
+- `what-openai-did` remains `deferred`.
+- Even if `what-openai-did` succeeds in a future observation run, it should remain deferred until explicitly promoted in a later maintenance decision.
+
+### Important boundary that remains
+
+- Do not classify the current `WinError 10013` pattern as a code regression by default.
+- Do not infer that the formal baseline expanded to 5 URLs from the directory-mode rerun.
+- Do not expand the importer, seed list, or crawl behavior as part of this maintenance pass.
+- Do not auto-promote `what-openai-did` from observation-only status.
+
+### Updated next-session starting point
+
+If the next session is content maintenance, rerun the formal baseline in a network-enabled environment before considering deferred candidates again. If the next session is Web/product iteration, treat this maintenance pass as complete and do not reopen seed promotion or importer design. Review current-filter label and type-specific empty states are already complete and should not be reopened by default.

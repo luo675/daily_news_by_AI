@@ -27,6 +27,55 @@ def _dashboard_redirect_url(request: Request) -> str:
     return f"/web/dashboard?{urlencode({'lang': _i18n(request).lang})}"
 
 
+def _review_query_type(request: Request) -> str:
+    value = str(request.query_params.get("type") or "all").strip().lower()
+    if value in {"all", "summary", "opportunity", "risk", "uncertainty"}:
+        return value
+    return "all"
+
+
+def _review_filter_url(request: Request, review_type: str) -> str:
+    query: list[tuple[str, str]] = [("lang", _i18n(request).lang)]
+    if review_type != "all":
+        query.append(("type", review_type))
+    return f"/web/review?{urlencode(query)}"
+
+
+def _review_filter_label(request: Request, review_type: str) -> str:
+    return {
+        "all": _text(request, "page.review.filter.all"),
+        "summary": _text(request, "page.review.filter.summary"),
+        "opportunity": _text(request, "page.review.filter.opportunity"),
+        "risk": _text(request, "page.review.filter.risk"),
+        "uncertainty": _text(request, "page.review.filter.uncertainty"),
+    }.get(review_type, _text(request, "page.review.filter.all"))
+
+
+def _review_empty_message(request: Request, review_type: str) -> str:
+    return {
+        "summary": _text(request, "page.review.empty.summary"),
+        "opportunity": _text(request, "page.review.empty.opportunity"),
+        "risk": _text(request, "page.review.empty.risk"),
+        "uncertainty": _text(request, "page.review.empty.uncertainty"),
+    }.get(review_type, _text(request, "page.review.empty"))
+
+
+def _review_filter_separator(request: Request) -> str:
+    return "：" if _i18n(request).lang == "zh" else ": "
+
+
+def _review_context_query(request: Request) -> list[tuple[str, str]]:
+    review_type = _review_query_type(request)
+    query: list[tuple[str, str]] = [("lang", _i18n(request).lang)]
+    if review_type != "all":
+        query.append(("type", review_type))
+    return query
+
+
+def _review_form_action(request: Request, target: str) -> str:
+    return f"{target}?{urlencode(_review_context_query(request))}"
+
+
 async def _read_form(request: Request) -> dict[str, str]:
     body = await request.body()
     parsed = parse_qs(body.decode("utf-8"), keep_blank_values=True)
@@ -430,6 +479,12 @@ def _redirect(target: str, message: str) -> RedirectResponse:
     return RedirectResponse(f"{target}?{encoded}", status_code=303)
 
 
+def _review_redirect(request: Request, message: str) -> RedirectResponse:
+    query = _review_context_query(request)
+    query.append(("message", message))
+    return RedirectResponse(f"/web/review?{urlencode(query)}", status_code=303)
+
+
 @router.get("/web")
 async def web_index(request: Request) -> RedirectResponse:
     return RedirectResponse(_dashboard_redirect_url(request), status_code=303)
@@ -767,10 +822,40 @@ async def document_detail(request: Request, document_id: str, message: str | Non
 
 @router.get("/web/review")
 async def review_page(request: Request, message: str | None = None) -> HTMLResponse:
-    uncertainties, uncertainty_error = service.list_review_uncertainties()
-    risks, risk_error = service.list_review_risks()
-    opportunities, opportunity_error = service.list_review_opportunities()
-    documents, error = service.list_review_documents()
+    review_type = _review_query_type(request)
+    uncertainties = []
+    risks = []
+    opportunities = []
+    documents = []
+    uncertainty_error: str | None = None
+    risk_error: str | None = None
+    opportunity_error: str | None = None
+    error: str | None = None
+
+    if review_type in {"all", "uncertainty"}:
+        uncertainties, uncertainty_error = service.list_review_uncertainties()
+    if review_type in {"all", "risk"}:
+        risks, risk_error = service.list_review_risks()
+    if review_type in {"all", "opportunity"}:
+        opportunities, opportunity_error = service.list_review_opportunities()
+    if review_type in {"all", "summary"}:
+        documents, error = service.list_review_documents()
+
+    filter_html = "".join(
+        f'<a class="nav-link" href="{escape(_review_filter_url(request, value))}">{escape(_text(request, key))}</a>'
+        for value, key in (
+            ("all", "page.review.filter.all"),
+            ("summary", "page.review.filter.summary"),
+            ("opportunity", "page.review.filter.opportunity"),
+            ("risk", "page.review.filter.risk"),
+            ("uncertainty", "page.review.filter.uncertainty"),
+        )
+    )
+    filter_bar = f'<div class="inline">{filter_html}</div>'
+    current_filter = (
+        f'<div class="muted">{escape(_text(request, "page.review.current_filter"))}{escape(_review_filter_separator(request))}'
+        f"{escape(_review_filter_label(request, review_type))}</div>"
+    )
     sections = []
     uncertainty_sections = []
     risk_sections = []
@@ -806,7 +891,7 @@ uncertainty_status={escape(str(item.auto_values.get("uncertainty_status") or "")
                   </div>
                   <div>
                     <h3>{escape(_text(request, "page.review.effective"))}</h3>
-                    <form method="post" action="/web/review/uncertainties/{item.brief.id}/{item.route_id}">
+                    <form method="post" action="{escape(_review_form_action(request, f'/web/review/uncertainties/{item.brief.id}/{item.route_id}'))}">
                       <textarea name="uncertainty_note" placeholder="uncertainty_note">{escape(str(item.effective_values.get("uncertainty_note") or ""))}</textarea>
                       <label><input type="checkbox" name="reset_uncertainty_note"> {escape(_text(request, "page.review.reset_to_auto"))}</label>
                       <select name="uncertainty_status">{"".join(uncertainty_status_options)}</select>
@@ -845,7 +930,7 @@ description={escape(str(item.auto_values.get("description") or ""))}</div>
                   </div>
                   <div>
                     <h3>{escape(_text(request, "page.review.effective"))}</h3>
-                    <form method="post" action="/web/review/risks/{item.brief.id}/{item.route_id}">
+                    <form method="post" action="{escape(_review_form_action(request, f'/web/review/risks/{item.brief.id}/{item.route_id}'))}">
                       <select name="severity">{severity_options}</select>
                       <label><input type="checkbox" name="reset_severity"> {escape(_text(request, "page.review.reset_to_auto"))}</label>
                       <textarea name="description" placeholder="description">{escape(str(item.effective_values.get("description") or ""))}</textarea>
@@ -899,7 +984,7 @@ total_score={escape(str(item.auto_values.get("total_score")))}
                   </div>
                   <div>
                     <h3>{escape(_text(request, "page.review.effective"))}</h3>
-                    <form method="post" action="/web/review/opportunities/{opportunity.id}">
+                    <form method="post" action="{escape(_review_form_action(request, f'/web/review/opportunities/{opportunity.id}'))}">
                     <input name="need_realness" type="number" min="1" max="10" value="{escape(str(item.effective_values.get("need_realness") or ""))}" placeholder="need_realness">
                     <label><input type="checkbox" name="reset_need_realness"> {escape(_text(request, "page.review.reset_to_auto"))}</label>
                     <input name="market_gap" type="number" min="1" max="10" value="{escape(str(item.effective_values.get("market_gap") or ""))}" placeholder="market_gap">
@@ -953,7 +1038,7 @@ key_points={escape(auto_key_points_text)}</div>
                   </div>
                   <div>
                     <h3>{escape(_text(request, "page.review.effective"))}</h3>
-                    <form method="post" action="/web/review/{summary.id}">
+                    <form method="post" action="{escape(_review_form_action(request, f'/web/review/{summary.id}'))}">
                     <textarea name="summary_zh" placeholder="summary_zh">{escape(str(item.effective_values.get("summary_zh") or ""))}</textarea>
                     <label><input type="checkbox" name="reset_summary_zh"> {escape(_text(request, "page.review.reset_to_auto"))}</label>
                     <textarea name="summary_en" placeholder="summary_en">{escape(str(item.effective_values.get("summary_en") or ""))}</textarea>
@@ -970,7 +1055,9 @@ key_points={escape(auto_key_points_text)}</div>
               </section>
               """
         )
-    content = "".join(uncertainty_sections + risk_sections + opportunity_sections + sections) or f"<div class='card'>{escape(_text(request, 'page.review.empty'))}</div>"
+    content = "".join(uncertainty_sections + risk_sections + opportunity_sections + sections)
+    if not content:
+        content = f"<div class='card'>{escape(_review_empty_message(request, review_type))}</div>"
     notes = []
     if uncertainty_error:
         notes.append(_render_database_note(request, uncertainty_error))
@@ -982,31 +1069,32 @@ key_points={escape(auto_key_points_text)}</div>
         notes.append(_render_database_note(request, error))
     if notes:
         content = "".join(notes) + content
+    content = f"{filter_bar}{current_filter}{content}"
     return _layout(request, _text(request, "page.review.title"), content, message=message)
 
 
 @router.post("/web/review/{summary_id}")
 async def save_review(summary_id: str, request: Request) -> RedirectResponse:
     message = service.save_summary_review(summary_id, await _read_form(request))
-    return _redirect("/web/review", message)
+    return _review_redirect(request, message)
 
 
 @router.post("/web/review/opportunities/{opportunity_id}")
 async def save_opportunity_review(opportunity_id: str, request: Request) -> RedirectResponse:
     message = service.save_opportunity_review(opportunity_id, await _read_form(request))
-    return _redirect("/web/review", message)
+    return _review_redirect(request, message)
 
 
 @router.post("/web/review/risks/{brief_id}/{route_id}")
 async def save_risk_review(brief_id: str, route_id: str, request: Request) -> RedirectResponse:
     message = service.save_risk_review(brief_id, route_id, await _read_form(request))
-    return _redirect("/web/review", message)
+    return _review_redirect(request, message)
 
 
 @router.post("/web/review/uncertainties/{brief_id}/{route_id}")
 async def save_uncertainty_review(brief_id: str, route_id: str, request: Request) -> RedirectResponse:
     message = service.save_uncertainty_review(brief_id, route_id, await _read_form(request))
-    return _redirect("/web/review", message)
+    return _review_redirect(request, message)
 
 
 @router.get("/web/watchlist")

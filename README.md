@@ -286,6 +286,29 @@ What this means in practice:
 
 For the latest handoff status and the most reasonable next-session starting point, always prefer [ARCH_CONTEXT.md](./ARCH_CONTEXT.md).
 
+## Latest Status Update (2026-05-01)
+
+This section supplements the older update above.
+
+- `/web/review` now supports lightweight `type` filtering with `all`, `summary`, `opportunity`, `risk`, and `uncertainty`.
+- Review type filtering is complete.
+- `type=all` remains the default and preserves the existing assembled Review behavior.
+- Invalid `type` values fall back to `all`.
+- The Review page now exposes filter links at the top of the page and preserves the current `lang` query parameter.
+- Review edit form actions and save redirects preserve the current `lang` and effective `type` context.
+- Review current-filter label and type-specific empty states are complete.
+- This is a Review page scanability and efficiency improvement only. It does not change review override semantics or review storage shape.
+- Latest verification completed successfully with `126 passed`.
+
+What this means in practice:
+
+- Review type filtering is complete
+- Review current-filter label and type-specific empty states are complete
+- the next Web task should not reopen Review filter design or review storage semantics
+- the project should move on to the next small page-quality or workflow-efficiency task on top of the stable baseline
+
+For the latest handoff status and the most reasonable next-session starting point, always prefer [ARCH_CONTEXT.md](./ARCH_CONTEXT.md).
+
 ## Latest Status Update (2026-04-30)
 
 This section supplements the older update above.

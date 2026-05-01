@@ -27,3 +27,23 @@ This cycle's URL-by-URL record:
 - `https://www.anthropic.com/news/claude-3-5-sonnet`: sandbox-restricted run failed with `URLError [WinError 10013]`; network-enabled rerun succeeded.
 - `https://www.anthropic.com/news/announcing-our-updated-responsible-scaling-policy`: sandbox-restricted run failed with `URLError [WinError 10013]`; network-enabled rerun succeeded.
 - `https://www.oneusefulthing.org/p/what-openai-did`: single-URL observation rerun succeeded in the network-enabled environment.
+
+## 2026-05-01 directory-mode rerun
+
+Directory-mode seed rerun:
+
+- Command: `.\.venv\Scripts\python.exe scripts\run_application_batch.py --url-list scripts\real_seed_sources --no-persist`
+- Result: `total=5`, `succeeded=0`, `failed=5`
+- Failure pattern: every attempted URL failed with `URLError: [WinError 10013]`
+- Judgment: this was a directory-mode rerun, not a pure formal-baseline-only rerun
+- Formal baseline definition remains 4 URLs
+- Judgment: environment/network restriction, not a source-specific regression
+
+Observation-only rerun:
+
+- Command: `.\.venv\Scripts\python.exe scripts\run_application_batch.py --url-list scripts\real_seed_sources\trial_oneusefulthing_minimal.txt --no-persist`
+- Result: `total=5`, `succeeded=0`, `failed=5`
+- Interpretation: the trial URL-list file contains 4 formal baseline URLs plus `what-openai-did`, so `total=5` is expected here and does not change the formal baseline definition.
+- Failure pattern: every attempted URL failed with `URLError: [WinError 10013]`
+- Judgment: observation could not be validated in this restricted environment, but the failure pattern still points to environment limits rather than a code regression
+- Promotion status: `what-openai-did` remains `deferred`

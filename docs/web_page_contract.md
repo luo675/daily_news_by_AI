@@ -343,6 +343,26 @@ Review page is an assembled view over:
 - risk review items
 - uncertainty review items
 
+Review query behavior:
+
+- `GET /web/review` defaults to `type=all` and keeps the existing assembled view
+- supported `type` values: `all`, `summary`, `opportunity`, `risk`, `uncertainty`
+- invalid `type` values fall back to `all`
+- the page header exposes filter links for the supported review types
+- filter links preserve the current `lang` query parameter
+- the page shows a current-filter label under the filter links
+- non-`all` empty states are type-specific:
+  - `summary` -> `No summary review items available.`
+  - `opportunity` -> `No opportunity review items available.`
+  - `risk` -> `No risk review items available.`
+  - `uncertainty` -> `No uncertainty review items available.`
+- `all` and invalid `type` values continue to use the shared empty state
+- current-filter label wording:
+  - `Current filter: ...`
+  - `当前筛选：...`
+- Review edit form actions preserve the current `lang` and effective `type`
+- Review save redirects return to `/web/review` with the same `lang` and effective `type`
+
 Current page-level wording rules:
 
 - empty review page -> `No review items available.`

@@ -20,7 +20,6 @@ from src.web.service import OpportunityReviewView, RiskReviewView, SummaryReview
 
 from src.web import service as web_service_module
 
-
 @pytest.fixture
 def workspace_tmp_path() -> Path:
     root = Path("tests") / ".tmp" / uuid.uuid4().hex
@@ -30,13 +29,11 @@ def workspace_tmp_path() -> Path:
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
-
 def _configure_web_storage(monkeypatch, tmp_path: Path) -> None:
     web_dir = tmp_path / "web"
     monkeypatch.setattr(web_service_module, "WEB_CONFIG_DIR", web_dir)
     monkeypatch.setattr(web_service_module, "AI_SETTINGS_PATH", web_dir / "ai_settings.json")
     monkeypatch.setattr(web_service_module, "QA_HISTORY_PATH", web_dir / "qa_history.json")
-
 
 def _build_opportunity() -> OpportunityAssessment:
     opportunity = OpportunityAssessment(
@@ -66,7 +63,6 @@ def _build_opportunity() -> OpportunityAssessment:
     opportunity._review_test_document = evidence_document
     return opportunity
 
-
 def _build_document_with_summary() -> Document:
     document = Document(
         id=uuid.uuid4(),
@@ -84,7 +80,6 @@ def _build_document_with_summary() -> Document:
     )
     return document
 
-
 def _build_brief_with_risks() -> DailyBrief:
     return DailyBrief(
         id=uuid.uuid4(),
@@ -101,7 +96,6 @@ def _build_brief_with_risks() -> DailyBrief:
         updated_at=datetime.now(timezone.utc),
     )
 
-
 def _build_brief_with_duplicate_risks() -> DailyBrief:
     duplicate = {
         "title": "Model provider concentration",
@@ -116,7 +110,6 @@ def _build_brief_with_duplicate_risks() -> DailyBrief:
         created_at=datetime.now(timezone.utc),
         updated_at=datetime.now(timezone.utc),
     )
-
 
 def _build_brief_with_special_item_id() -> DailyBrief:
     return DailyBrief(
@@ -135,7 +128,6 @@ def _build_brief_with_special_item_id() -> DailyBrief:
         updated_at=datetime.now(timezone.utc),
     )
 
-
 def _build_brief_with_uncertainties() -> DailyBrief:
     return DailyBrief(
         id=uuid.uuid4(),
@@ -145,7 +137,6 @@ def _build_brief_with_uncertainties() -> DailyBrief:
         created_at=datetime.now(timezone.utc),
         updated_at=datetime.now(timezone.utc),
     )
-
 
 def _build_brief_with_duplicate_uncertainties() -> DailyBrief:
     return DailyBrief(
@@ -160,7 +151,6 @@ def _build_brief_with_duplicate_uncertainties() -> DailyBrief:
         updated_at=datetime.now(timezone.utc),
     )
 
-
 class _FakeScalarResult:
     def __init__(self, items):
         self._items = items
@@ -170,7 +160,6 @@ class _FakeScalarResult:
 
     def __iter__(self):
         return iter(self._items)
-
 
 class _FakeReadSession:
     def __init__(self, opportunities=None, briefs=None):
@@ -184,7 +173,6 @@ class _FakeReadSession:
 
     def close(self):
         self.closed = True
-
 
 class _FakeWriteSession:
     def __init__(
@@ -213,7 +201,6 @@ class _FakeWriteSession:
 
     def close(self):
         self.closed = True
-
 
 class _FakeAtomicSession:
     def __init__(self):
@@ -244,7 +231,6 @@ class _FakeAtomicSession:
 
     def scalars(self, stmt):
         return []
-
 
 def test_list_review_opportunities_applies_manual_overrides(monkeypatch, workspace_tmp_path: Path) -> None:
     _configure_web_storage(monkeypatch, workspace_tmp_path)
@@ -298,7 +284,6 @@ def test_list_review_opportunities_applies_manual_overrides(monkeypatch, workspa
     assert views[0].effective_values["priority_score"] == 8
     assert views[0].effective_values["uncertainty"] is True
     assert views[0].effective_values["uncertainty_reason"] == "manual note"
-
 
 def test_save_summary_review_writes_review_edits_only(monkeypatch, workspace_tmp_path: Path) -> None:
     _configure_web_storage(monkeypatch, workspace_tmp_path)
@@ -354,7 +339,6 @@ def test_save_summary_review_writes_review_edits_only(monkeypatch, workspace_tmp
     assert edits[0].new_value == "人工中文摘要"
     assert edits[1].new_value == "Manual English summary"
     assert edits[2].new_value == ["Manual key point one", "Manual key point two"]
-
 
 def test_save_summary_review_reset_to_auto(monkeypatch, workspace_tmp_path: Path) -> None:
     _configure_web_storage(monkeypatch, workspace_tmp_path)
@@ -413,7 +397,6 @@ def test_save_summary_review_reset_to_auto(monkeypatch, workspace_tmp_path: Path
     assert edits[0].new_value == review_service_db.RESET_TO_AUTO_SENTINEL
     assert edits[1].new_value == review_service_db.RESET_TO_AUTO_SENTINEL
     assert edits[2].new_value == review_service_db.RESET_TO_AUTO_SENTINEL
-
 
 def test_save_opportunity_review_writes_review_edits_only(monkeypatch, workspace_tmp_path: Path) -> None:
     _configure_web_storage(monkeypatch, workspace_tmp_path)
@@ -490,7 +473,6 @@ def test_save_opportunity_review_writes_review_edits_only(monkeypatch, workspace
     ]
     assert edits[0].old_value == 6
     assert edits[0].new_value == 9
-
 
 def test_save_opportunity_review_clearing_manual_field_resets_to_auto(
     monkeypatch,
@@ -569,7 +551,6 @@ def test_save_opportunity_review_clearing_manual_field_resets_to_auto(
     assert edits[0].field_name == "need_realness"
     assert edits[0].new_value == review_service_db.RESET_TO_AUTO_SENTINEL
 
-
 def test_database_review_service_uses_auto_value_when_latest_edit_is_reset_marker() -> None:
     assert hasattr(review_service_db, "RESET_TO_AUTO_SENTINEL")
     service = DatabaseReviewService(_FakeAtomicSession())
@@ -589,7 +570,6 @@ def test_database_review_service_uses_auto_value_when_latest_edit_is_reset_marke
 
     assert service.get_effective_value("opportunity_score", target_id, "need_realness", 4) == 4
 
-
 def test_database_review_service_create_batch_is_atomic() -> None:
     session = _FakeAtomicSession()
     service = DatabaseReviewService(session)
@@ -606,7 +586,6 @@ def test_database_review_service_create_batch_is_atomic() -> None:
 
     assert session.commit_count == 0
     assert session.persisted == []
-
 
 def test_review_page_renders_opportunity_review_card(monkeypatch, workspace_tmp_path: Path) -> None:
     _configure_web_storage(monkeypatch, workspace_tmp_path)
@@ -650,7 +629,6 @@ def test_review_page_renders_opportunity_review_card(monkeypatch, workspace_tmp_
     assert "action=\"/web/review/opportunities/" in response.text
     assert "name=\"reset_status\"" in response.text
     assert "name=\"reset_uncertainty\"" in response.text
-
 
 def test_review_page_renders_summary_review_card(monkeypatch, workspace_tmp_path: Path) -> None:
     _configure_web_storage(monkeypatch, workspace_tmp_path)
@@ -709,8 +687,7 @@ def test_review_page_renders_summary_review_card(monkeypatch, workspace_tmp_path
     assert "name=\"reset_summary_zh\"" in response.text
     assert "name=\"reset_summary_en\"" in response.text
     assert "name=\"reset_key_points\"" in response.text
-    assert f"action=\"/web/review/{summary.id}\"" in response.text
-
+    assert f"action=\"/web/review/{summary.id}?lang=zh\"" in response.text
 
 def test_review_page_renders_english_shell_when_lang_query_requests_en(monkeypatch, workspace_tmp_path: Path) -> None:
     _configure_web_storage(monkeypatch, workspace_tmp_path)
@@ -738,7 +715,7 @@ def test_review_page_renders_english_shell_when_lang_query_requests_en(monkeypat
     )
 
     client = TestClient(create_app())
-    response = client.get("/web/review?lang=en")
+    response = client.get("/web/review?lang=en&type=summary")
 
     assert response.status_code == 200
     assert "Review" in response.text
@@ -746,8 +723,206 @@ def test_review_page_renders_english_shell_when_lang_query_requests_en(monkeypat
     assert "Automatic Result" in response.text
     assert "Effective Values" in response.text
     assert "Review History" in response.text
+    assert "/web/review?lang=en" in response.text
+    assert "/web/review?lang=en&amp;type=opportunity" in response.text
+    assert f"action=\"/web/review/{summary.id}?lang=en&amp;type=summary\"" in response.text
     assert "摘要审阅" not in response.text
 
+def test_review_page_renders_type_specific_empty_state(monkeypatch, workspace_tmp_path: Path) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    monkeypatch.setattr(web_routes.service, "list_review_uncertainties", lambda: ([], None))
+    monkeypatch.setattr(web_routes.service, "list_review_risks", lambda: ([], None))
+    monkeypatch.setattr(web_routes.service, "list_review_opportunities", lambda: ([], None))
+    monkeypatch.setattr(web_routes.service, "list_review_documents", lambda: ([], None))
+
+    client = TestClient(create_app())
+    response = client.get("/web/review?type=risk")
+
+    assert response.status_code == 200
+    assert "\u5f53\u524d\u7b5b\u9009\uff1a\u98ce\u9669" in response.text
+    assert "\u6682\u65e0\u98ce\u9669\u5ba1\u9605\u9879\u3002" in response.text
+    assert "\u6682\u65e0\u5ba1\u9605\u9879\u3002" not in response.text
+
+
+def test_review_page_renders_english_type_specific_empty_state(monkeypatch, workspace_tmp_path: Path) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    monkeypatch.setattr(web_routes.service, "list_review_uncertainties", lambda: ([], None))
+    monkeypatch.setattr(web_routes.service, "list_review_risks", lambda: ([], None))
+    monkeypatch.setattr(web_routes.service, "list_review_opportunities", lambda: ([], None))
+    monkeypatch.setattr(web_routes.service, "list_review_documents", lambda: ([], None))
+
+    client = TestClient(create_app())
+    response = client.get("/web/review?lang=en&type=summary")
+
+    assert response.status_code == 200
+    assert "Current filter: Summary" in response.text
+    assert "No summary review items available." in response.text
+    assert "No review items available." not in response.text
+
+
+@pytest.mark.parametrize(
+    "review_type, expected_counts, present_texts, absent_texts",
+    [
+        (
+            "summary",
+            {"uncertainties": 0, "risks": 0, "opportunities": 0, "documents": 1},
+            ["Reviewed summary document"],
+            ["Auto opportunity title", "Model provider concentration", "Provider lock-in remains unclear."],
+        ),
+        (
+            "opportunity",
+            {"uncertainties": 0, "risks": 0, "opportunities": 1, "documents": 0},
+            ["Auto opportunity title"],
+            ["Reviewed summary document", "Model provider concentration", "Provider lock-in remains unclear."],
+        ),
+        (
+            "risk",
+            {"uncertainties": 0, "risks": 1, "opportunities": 0, "documents": 0},
+            ["Model provider concentration"],
+            ["Reviewed summary document", "Auto opportunity title", "Provider lock-in remains unclear."],
+        ),
+        (
+            "uncertainty",
+            {"uncertainties": 1, "risks": 0, "opportunities": 0, "documents": 0},
+            ["Provider lock-in remains unclear."],
+            ["Reviewed summary document", "Auto opportunity title", "Model provider concentration"],
+        ),
+        (
+            "bogus",
+            {"uncertainties": 1, "risks": 1, "opportunities": 1, "documents": 1},
+            ["Reviewed summary document", "Auto opportunity title", "Model provider concentration", "Provider lock-in remains unclear."],
+            [],
+        ),
+    ],
+)
+def test_review_page_type_filter_calls_only_requested_service(
+    monkeypatch,
+    workspace_tmp_path: Path,
+    review_type: str,
+    expected_counts: dict[str, int],
+    present_texts: list[str],
+    absent_texts: list[str],
+) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+
+    summary_document = _build_document_with_summary()
+    summary = summary_document.summary
+    assert summary is not None
+    opportunity = _build_opportunity()
+    brief_risk = _build_brief_with_risks()
+    brief_uncertainty = _build_brief_with_uncertainties()
+    risk_target_id = uuid.uuid4()
+    uncertainty_target_id = uuid.uuid4()
+
+    counts = {"uncertainties": 0, "risks": 0, "opportunities": 0, "documents": 0}
+
+    def _count(name: str, payload: tuple[list[object], str | None]):
+        def _inner():
+            counts[name] += 1
+            return payload
+
+        return _inner
+
+    monkeypatch.setattr(
+        web_routes.service,
+        "list_review_uncertainties",
+        _count(
+            "uncertainties",
+            (
+                [
+                    UncertaintyReviewView(
+                        brief=brief_uncertainty,
+                        uncertainty_item=brief_uncertainty.uncertainties[0],
+                        item_id="uncertainty-item-1",
+                        route_id=str(uncertainty_target_id),
+                        target_id=uncertainty_target_id,
+                        auto_values={"uncertainty_note": "Provider lock-in remains unclear.", "uncertainty_status": None},
+                        effective_values={"uncertainty_note": "Manual uncertainty note.", "uncertainty_status": None},
+                        history=[],
+                    )
+                ],
+                None,
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        web_routes.service,
+        "list_review_risks",
+        _count(
+            "risks",
+            (
+                [
+                    RiskReviewView(
+                        brief=brief_risk,
+                        risk_item=brief_risk.risks[0],
+                        item_id="risk-item-1",
+                        route_id=str(risk_target_id),
+                        target_id=risk_target_id,
+                        auto_values={"severity": "high", "description": "Too much workflow dependency on one provider."},
+                        effective_values={"severity": "medium", "description": "Manual risk wording."},
+                        history=[],
+                    )
+                ],
+                None,
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        web_routes.service,
+        "list_review_opportunities",
+        _count(
+            "opportunities",
+            (
+                [
+                    OpportunityReviewView(
+                        opportunity=opportunity,
+                        auto_values={"need_realness": 4, "priority_score": 7, "uncertainty": False},
+                        effective_values={"need_realness": 9, "priority_score": 8, "uncertainty": True},
+                        history=[],
+                        source_document_title="Backing document",
+                    )
+                ],
+                None,
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        web_routes.service,
+        "list_review_documents",
+        _count(
+            "documents",
+            (
+                [
+                    SummaryReviewView(
+                        document=summary_document,
+                        summary=summary,
+                        auto_values={
+                            "summary_zh": "自动中文摘要",
+                            "summary_en": "Automatic English summary",
+                            "key_points": ["Auto key point one", "Auto key point two"],
+                        },
+                        effective_values={
+                            "summary_zh": "人工中文摘要",
+                            "summary_en": "Manual English summary",
+                            "key_points": ["Manual key point one"],
+                        },
+                        history=[],
+                    )
+                ],
+                None,
+            ),
+        ),
+    )
+
+    client = TestClient(create_app())
+    response = client.get(f"/web/review?type={review_type}")
+
+    assert response.status_code == 200
+    assert counts == expected_counts
+    for text in present_texts:
+        assert text in response.text
+    for text in absent_texts:
+        assert text not in response.text
 
 def test_review_page_submit_includes_explicit_reset_flags(monkeypatch, workspace_tmp_path: Path) -> None:
     _configure_web_storage(monkeypatch, workspace_tmp_path)
@@ -779,6 +954,82 @@ def test_review_page_submit_includes_explicit_reset_flags(monkeypatch, workspace
     assert captured["form"]["reset_status"] == "on"
     assert captured["form"]["reset_uncertainty"] == "on"
 
+def test_review_summary_submit_preserves_current_type_and_lang(
+    monkeypatch,
+    workspace_tmp_path: Path,
+) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    summary_id = str(uuid.uuid4())
+
+    monkeypatch.setattr(
+        web_routes.service,
+        "save_summary_review",
+        lambda summary_id_arg, form: "Summary review saved.",
+    )
+
+    client = TestClient(create_app())
+    response = client.post(
+        f"/web/review/{summary_id}?lang=en&type=summary",
+        data={"summary_en": "Manual summary"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/web/review?")
+    assert "lang=en" in response.headers["location"]
+    assert "type=summary" in response.headers["location"]
+
+@pytest.mark.parametrize(
+    "route, data, expected_type, saver_name, saver",
+    [
+        (
+            "/web/review/opportunities/{item_id}?lang=en&type=opportunity",
+            {"need_realness": "8"},
+            "opportunity",
+            "save_opportunity_review",
+            lambda item_id, form: "Opportunity review saved.",
+        ),
+        (
+            "/web/review/risks/{brief_id}/{item_id}?lang=en&type=risk",
+            {"severity": "medium"},
+            "risk",
+            "save_risk_review",
+            lambda brief_id, item_id, form: "Risk review saved.",
+        ),
+        (
+            "/web/review/uncertainties/{brief_id}/{item_id}?lang=en&type=uncertainty",
+            {"uncertainty_note": "Manual note"},
+            "uncertainty",
+            "save_uncertainty_review",
+            lambda brief_id, item_id, form: "Uncertainty review saved.",
+        ),
+    ],
+)
+def test_review_non_summary_submit_preserves_current_type_and_lang(
+    monkeypatch,
+    workspace_tmp_path: Path,
+    route: str,
+    data: dict[str, str],
+    expected_type: str,
+    saver_name: str,
+    saver,
+) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    brief_id = str(uuid.uuid4())
+    item_id = str(uuid.uuid4())
+    monkeypatch.setattr(web_routes.service, saver_name, saver)
+
+    client = TestClient(create_app())
+    response = client.post(
+        route.format(brief_id=brief_id, item_id=item_id),
+        data=data,
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/web/review?")
+    assert "lang=en" in response.headers["location"]
+    assert f"type={expected_type}" in response.headers["location"]
 
 def test_list_review_risks_applies_manual_overrides(monkeypatch, workspace_tmp_path: Path) -> None:
     _configure_web_storage(monkeypatch, workspace_tmp_path)
@@ -830,7 +1081,6 @@ def test_list_review_risks_applies_manual_overrides(monkeypatch, workspace_tmp_p
     assert views[0].effective_values["description"] == "Manual risk wording."
     assert views[0].item_id
 
-
 def test_list_review_risks_gives_duplicate_items_distinct_targets(monkeypatch, workspace_tmp_path: Path) -> None:
     _configure_web_storage(monkeypatch, workspace_tmp_path)
     service = WebMvpService()
@@ -863,7 +1113,6 @@ def test_list_review_risks_gives_duplicate_items_distinct_targets(monkeypatch, w
     assert len(views) == 2
     assert views[0].item_id != views[1].item_id
     assert views[0].target_id != views[1].target_id
-
 
 def test_save_risk_review_writes_review_edits_only(monkeypatch, workspace_tmp_path: Path) -> None:
     _configure_web_storage(monkeypatch, workspace_tmp_path)
@@ -917,7 +1166,6 @@ def test_save_risk_review_writes_review_edits_only(monkeypatch, workspace_tmp_pa
     edits = captured["batch"]
     assert [edit.field_name for edit in edits] == ["severity", "description"]
 
-
 def test_save_risk_review_reset_to_auto(monkeypatch, workspace_tmp_path: Path) -> None:
     _configure_web_storage(monkeypatch, workspace_tmp_path)
     service = WebMvpService()
@@ -970,7 +1218,6 @@ def test_save_risk_review_reset_to_auto(monkeypatch, workspace_tmp_path: Path) -
     assert edits[0].new_value == review_service_db.RESET_TO_AUTO_SENTINEL
     assert edits[1].new_value == review_service_db.RESET_TO_AUTO_SENTINEL
 
-
 def test_database_review_service_create_batch_is_atomic_for_risk() -> None:
     session = _FakeAtomicSession()
     service = DatabaseReviewService(session)
@@ -987,7 +1234,6 @@ def test_database_review_service_create_batch_is_atomic_for_risk() -> None:
 
     assert session.commit_count == 0
     assert session.persisted == []
-
 
 def test_review_page_renders_risk_review_card(monkeypatch, workspace_tmp_path: Path) -> None:
     _configure_web_storage(monkeypatch, workspace_tmp_path)
@@ -1036,8 +1282,7 @@ def test_review_page_renders_risk_review_card(monkeypatch, workspace_tmp_path: P
     assert "Model provider concentration" in response.text
     assert "name=\"reset_severity\"" in response.text
     assert "name=\"reset_description\"" in response.text
-    assert f"action=\"/web/review/risks/{brief.id}/{target_id}\"" in response.text
-
+    assert f"action=\"/web/review/risks/{brief.id}/{target_id}?lang=zh\"" in response.text
 
 def test_review_page_submit_risk_includes_reset_flags(monkeypatch, workspace_tmp_path: Path) -> None:
     _configure_web_storage(monkeypatch, workspace_tmp_path)
@@ -1072,7 +1317,6 @@ def test_review_page_submit_risk_includes_reset_flags(monkeypatch, workspace_tmp
     assert captured["form"]["reset_severity"] == "on"
     assert captured["form"]["reset_description"] == "on"
 
-
 def test_review_page_uses_safe_risk_route_id_for_special_item_id(monkeypatch, workspace_tmp_path: Path) -> None:
     _configure_web_storage(monkeypatch, workspace_tmp_path)
     brief = _build_brief_with_special_item_id()
@@ -1105,7 +1349,6 @@ def test_review_page_uses_safe_risk_route_id_for_special_item_id(monkeypatch, wo
     assert response.status_code == 200
     assert f"/web/review/risks/{brief.id}/{target_id}" in response.text
     assert "risk/with special?chars#1" not in response.text.split(f"/web/review/risks/{brief.id}/", 1)[1].split('"', 1)[0]
-
 
 def test_list_review_uncertainties_applies_manual_overrides(monkeypatch, workspace_tmp_path: Path) -> None:
     _configure_web_storage(monkeypatch, workspace_tmp_path)
@@ -1156,7 +1399,6 @@ def test_list_review_uncertainties_applies_manual_overrides(monkeypatch, workspa
     assert views[0].effective_values["uncertainty_note"] == "Manual uncertainty note."
     assert views[0].effective_values["uncertainty_status"] == "watching"
 
-
 def test_list_review_uncertainties_gives_duplicate_items_distinct_targets(
     monkeypatch,
     workspace_tmp_path: Path,
@@ -1192,7 +1434,6 @@ def test_list_review_uncertainties_gives_duplicate_items_distinct_targets(
     assert len(views) == 2
     assert views[0].item_id != views[1].item_id
     assert views[0].target_id != views[1].target_id
-
 
 def test_save_uncertainty_review_writes_review_edits_only(monkeypatch, workspace_tmp_path: Path) -> None:
     _configure_web_storage(monkeypatch, workspace_tmp_path)
@@ -1252,7 +1493,6 @@ def test_save_uncertainty_review_writes_review_edits_only(monkeypatch, workspace
     edits = captured["batch"]
     assert [edit.field_name for edit in edits] == ["uncertainty_note", "uncertainty_status"]
 
-
 def test_save_uncertainty_review_note_only_does_not_create_status_override(
     monkeypatch,
     workspace_tmp_path: Path,
@@ -1310,7 +1550,6 @@ def test_save_uncertainty_review_note_only_does_not_create_status_override(
     assert message == "Uncertainty review saved."
     edits = captured["batch"]
     assert [edit.field_name for edit in edits] == ["uncertainty_note"]
-
 
 def test_save_uncertainty_review_placeholder_status_does_not_create_status_override(
     monkeypatch,
@@ -1370,7 +1609,6 @@ def test_save_uncertainty_review_placeholder_status_does_not_create_status_overr
     edits = captured["batch"]
     assert [edit.field_name for edit in edits] == ["uncertainty_note"]
 
-
 def test_save_uncertainty_review_reset_to_auto(monkeypatch, workspace_tmp_path: Path) -> None:
     _configure_web_storage(monkeypatch, workspace_tmp_path)
     service = WebMvpService()
@@ -1429,7 +1667,6 @@ def test_save_uncertainty_review_reset_to_auto(monkeypatch, workspace_tmp_path: 
     assert edits[0].new_value == review_service_db.RESET_TO_AUTO_SENTINEL
     assert edits[1].new_value == review_service_db.RESET_TO_AUTO_SENTINEL
 
-
 def test_review_page_renders_uncertainty_review_card(monkeypatch, workspace_tmp_path: Path) -> None:
     _configure_web_storage(monkeypatch, workspace_tmp_path)
     brief = _build_brief_with_uncertainties()
@@ -1480,8 +1717,7 @@ def test_review_page_renders_uncertainty_review_card(monkeypatch, workspace_tmp_
     assert '<option value="open" selected>' not in response.text
     assert "name=\"reset_uncertainty_note\"" in response.text
     assert "name=\"reset_uncertainty_status\"" in response.text
-    assert f"action=\"/web/review/uncertainties/{brief.id}/{target_id}\"" in response.text
-
+    assert f"action=\"/web/review/uncertainties/{brief.id}/{target_id}?lang=zh\"" in response.text
 
 def test_review_page_renders_empty_state_with_shared_review_language(
     monkeypatch,
@@ -1499,7 +1735,6 @@ def test_review_page_renders_empty_state_with_shared_review_language(
     assert response.status_code == 200
     assert "暂无审阅项。" in response.text
 
-
 def test_review_page_renders_shared_database_note(monkeypatch, workspace_tmp_path: Path) -> None:
     _configure_web_storage(monkeypatch, workspace_tmp_path)
     monkeypatch.setattr(web_routes.service, "list_review_uncertainties", lambda: ([], "Database session unavailable."))
@@ -1514,7 +1749,6 @@ def test_review_page_renders_shared_database_note(monkeypatch, workspace_tmp_pat
     assert "数据库提示:" in response.text
     assert "部分页面数据暂不可用。" in response.text
     assert "Database session unavailable." in response.text
-
 
 def test_review_page_submit_uncertainty_includes_reset_flags(monkeypatch, workspace_tmp_path: Path) -> None:
     _configure_web_storage(monkeypatch, workspace_tmp_path)
@@ -1548,7 +1782,6 @@ def test_review_page_submit_uncertainty_includes_reset_flags(monkeypatch, worksp
     assert captured["route_id"] == route_id
     assert captured["form"]["reset_uncertainty_note"] == "on"
     assert captured["form"]["reset_uncertainty_status"] == "on"
-
 
 def test_review_page_submit_uncertainty_placeholder_preserves_form_and_skips_status_edit(
     monkeypatch,
@@ -1619,7 +1852,6 @@ def test_review_page_submit_uncertainty_placeholder_preserves_form_and_skips_sta
     assert captured["form"]["uncertainty_status"] == "__UNCHANGED__"
     edits = captured["batch"]
     assert [edit.field_name for edit in edits] == ["uncertainty_note"]
-
 
 def test_database_review_service_create_batch_is_atomic_for_uncertainty() -> None:
     session = _FakeAtomicSession()
