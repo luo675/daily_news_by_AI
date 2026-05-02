@@ -1648,3 +1648,95 @@ If the next session is Web/product iteration:
 4. Otherwise pick a new small page-quality or workflow-efficiency task on top of the stable Web MVP baseline.
 
 If the next session is content maintenance, keep using the Section 16 rule: rerun the formal baseline in a network-enabled environment before reconsidering deferred candidates.
+
+## 18. Latest Progress Addendum (2026-05-02 Web MVP user-trial readiness)
+
+This addendum records the completed browser smoke pass, minimal real-experience closed-loop trial, and user handoff notes. It overrides older notes that described the browser smoke checklist as not yet run or the Web MVP as not yet ready for user trial.
+
+### Completed in this round
+
+- The Web MVP manual browser smoke checklist was executed and recorded in `docs/web_browser_smoke_checklist.md`.
+- The latest browser smoke pass date is now `2026-05-02`.
+- Browser smoke was run against the local app started with:
+  - `uvicorn src.api.app:create_app --factory --reload`
+- The smoke pass covered:
+  - `/web/dashboard`
+  - `/web/documents`
+  - `/web/sources`
+  - `/web/review`
+  - `/web/watchlist`
+  - `/web/ask`
+  - `/web/ai-settings`
+  - `/web/system`
+- Default Chinese shell copy and explicit `?lang=en` English shell copy were verified.
+- AI Settings list and edit pages were checked for key masking; only masked keys were shown, not plaintext `api_key` values.
+- Web-related pytest verification was run with:
+  - `pytest tests/test_web_mvp_acceptance.py tests/test_web_dashboard_documents.py tests/test_web_ask.py tests/test_web_review_opportunities.py tests/test_web_i18n.py -q`
+  - result: `128 passed`
+- A minimal real-experience closed-loop trial was completed and recorded in `docs/web_mvp_trial_report.md`.
+- The trial seed list was added at:
+  - `scripts/real_seed_sources/trial_web_mvp_closed_loop.txt`
+- The trial used 5 URLs:
+  - `https://simonwillison.net/2024/May/29/training-not-chatting/`
+  - `https://simonwillison.net/2024/Dec/31/llms-in-2024/`
+  - `https://www.anthropic.com/news/claude-3-5-sonnet`
+  - `https://www.anthropic.com/news/announcing-our-updated-responsible-scaling-policy`
+  - `https://www.oneusefulthing.org/p/what-openai-did`
+- Batch importer precheck completed with:
+  - `5/5 succeeded` in `--no-persist` mode
+- Persistent batch import completed with:
+  - `5/5 succeeded`
+- The browser trial verified:
+  - Dashboard had real content
+  - Documents showed real documents
+  - Document Detail opened successfully
+  - Watchlist card state was visible after creating 3 items
+  - Review saved 1 manual edit and showed history
+  - Ask returned local evidence for 2 questions
+- A one-page user trial guide was added:
+  - `docs/user_trial_guide.md`
+
+### Updated stable understanding
+
+- The Web MVP is now ready for a user trial walkthrough.
+- This should be understood as `minimal real closed-loop user trial ready`, not production-ready.
+- The current experience is no longer just route-level smoke or empty-page validation.
+- The local Web path has been exercised across:
+  - import
+  - browse
+  - document detail
+  - watchlist
+  - review edit/save/history
+  - Ask with local evidence
+- The current user entry points are:
+  - `http://127.0.0.1:8000/web`
+  - `http://127.0.0.1:8000/web/dashboard`
+- Suggested user trial path:
+  - Dashboard -> Documents -> Detail -> Review -> Watchlist -> Ask
+
+### Important boundary that remains
+
+- The trial dataset is intentionally small and is not a production corpus.
+- The local database may contain historical data, so visible pages may show more than the 5 trial URLs.
+- This does not validate production-scale answer quality, corpus quality, provider quality, or long-running operations.
+- Do not treat the trial seed list as a promoted formal baseline by default.
+- Do not expand crawling, Playwright support, source discovery, advanced RAG, or provider behavior as part of this handoff state.
+- Do not modify `src/domain/*`, `src/application/*`, or `src/processing/*` unless a concrete user-trial regression requires it.
+
+### Updated next-session starting point
+
+The next session should start with user trial feedback, not new feature expansion.
+
+Recommended order:
+
+1. The user runs the local app and follows `docs/user_trial_guide.md`.
+2. Capture feedback using:
+   - problem page
+   - reproduction steps
+   - expected result
+   - actual result
+   - severity
+3. Triage the highest-priority 3-5 issues.
+4. Only then open a focused fix or small workflow-improvement task.
+
+Do not continue adding page-quality tasks or data-source expansion by default before user feedback is collected.

@@ -335,6 +335,49 @@ What this means in practice:
 
 For the latest handoff status and the most reasonable next-session starting point, always prefer [ARCH_CONTEXT.md](./ARCH_CONTEXT.md).
 
+## Latest Status Update (2026-05-02 User Trial Ready)
+
+This section supplements the older updates above.
+
+- The Web MVP browser smoke checklist has been run and recorded in [docs/web_browser_smoke_checklist.md](./docs/web_browser_smoke_checklist.md).
+- Latest browser smoke pass date: `2026-05-02`.
+- Smoke coverage included:
+  - `/web/dashboard`
+  - `/web/documents`
+  - `/web/sources`
+  - `/web/review`
+  - `/web/watchlist`
+  - `/web/ask`
+  - `/web/ai-settings`
+  - `/web/system`
+- Default Chinese shell copy and explicit `?lang=en` English shell copy were verified.
+- AI Settings list and edit pages were checked to ensure masked keys are shown and plaintext `api_key` values are not rendered.
+- A minimal real-experience closed-loop trial was completed and recorded in [docs/web_mvp_trial_report.md](./docs/web_mvp_trial_report.md).
+- The trial seed list is [scripts/real_seed_sources/trial_web_mvp_closed_loop.txt](./scripts/real_seed_sources/trial_web_mvp_closed_loop.txt).
+- The trial imported 5 URLs successfully:
+  - `--no-persist` precheck: `5/5 succeeded`
+  - persistent import: `5/5 succeeded`
+- The trial verified:
+  - Dashboard has real content
+  - Documents has real documents
+  - Document Detail opens
+  - Watchlist card state works after creating 3 items
+  - Review can save a manual edit and show history
+  - Ask returns local evidence for user questions
+- A one-page user trial guide was added at [docs/user_trial_guide.md](./docs/user_trial_guide.md).
+- Latest Web-related pytest verification for this trial path was:
+  - `pytest tests/test_web_mvp_acceptance.py tests/test_web_dashboard_documents.py tests/test_web_ask.py tests/test_web_review_opportunities.py tests/test_web_i18n.py -q`
+  - `128 passed`
+
+What this means in practice:
+
+- The project is ready for a local user-trial walkthrough.
+- This is a minimal real closed loop, not a production-grade knowledge corpus.
+- The next step should be user feedback collection, not new feature expansion.
+- Use [docs/user_trial_guide.md](./docs/user_trial_guide.md) to start the local app and follow the suggested path.
+
+For the latest handoff status and the most reasonable next-session starting point, always prefer [ARCH_CONTEXT.md](./ARCH_CONTEXT.md).
+
 ## Latest Status Update (2026-04-30)
 
 This section supplements the older update above.

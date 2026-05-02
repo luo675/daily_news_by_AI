@@ -2,7 +2,15 @@
 
 Date of latest pass:
 
-- `not run yet`
+- `2026-05-02`
+
+Result summary:
+
+- Passed with local Edge headless browser smoke checks against `uvicorn src.api.app:create_app --factory --reload`.
+- Verified `/web/dashboard`, `/web/documents`, `/web/sources`, `/web/review`, `/web/watchlist`, `/web/ask`, `/web/ai-settings`, and `/web/system`.
+- Confirmed default Chinese shell copy and `?lang=en` English shell copy on the listed pages.
+- Confirmed AI Settings list and edit pages only exposed masked keys, not plaintext `api_key` values.
+- Watchlist was in empty-state mode during smoke; the create form rendered and the page remained navigable.
 
 Scope:
 
