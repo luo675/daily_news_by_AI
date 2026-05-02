@@ -1740,3 +1740,75 @@ Recommended order:
 4. Only then open a focused fix or small workflow-improvement task.
 
 Do not continue adding page-quality tasks or data-source expansion by default before user feedback is collected.
+
+## 19. Latest Progress Addendum (2026-05-02 User-trial feedback fixes and local data maintenance)
+
+This addendum records the first user-trial feedback fixes after the Web MVP was marked ready for walkthrough. It overrides older notes that still describe Dashboard, Documents, AI Settings, System, Sources, or Ask evidence as needing the earlier page-quality follow-ups.
+
+### Completed in this round
+
+- Dashboard Recent Documents and Documents list were changed from cramped multi-column tables to responsive document cards.
+  - Long English titles and summaries no longer depend on narrow table columns.
+  - Document cards prioritize title, summary, source/status/language/time, signals, and detail entry.
+  - Signal chips wrap naturally instead of being compressed into vertical text.
+- AI Settings provider list was converted into a scrollable management table.
+  - The list now prioritizes provider name, Base URL, model, masked key, status badges, and actions.
+  - Raw API keys are not rendered.
+  - Long Base URLs are truncated in the table.
+  - Edit and Test actions are aligned as a compact action group.
+- System / Storage was redesigned from a debug-style page into a more mature management overview.
+  - Storage overview is presented as user-readable cards.
+  - System checks use status badges.
+  - Database counts are shown as stat cards.
+  - Storage files use a clearer table with truncated paths and formatted sizes.
+- Sources was redesigned as a more mature source-management page.
+  - Source rows now emphasize source name and URL readability.
+  - Source type, credibility, active state, and maintenance status are badge-like.
+  - Web maintenance metadata is compact instead of long stacked text.
+  - Source actions are aligned horizontally.
+  - The create-source form is grouped, and raw JSON config is treated as an advanced section.
+- Ask / Q&A document evidence was strengthened for long local articles.
+  - Document evidence now includes a bounded `context` field from `Document.content_text`.
+  - External provider prompts include `Context:` in addition to title, source, match basis, and snippet.
+  - Summary skeletons no longer count as summary matches unless they actually match query terms.
+  - A local content match with bounded context can enter `local_with_external_reasoning` while preserving `local retrieval first`.
+- A local test-document cleanup utility was added.
+  - `scripts/cleanup_test_documents.py` is dry-run by default.
+  - `--apply` is required to delete matched developer/example documents.
+  - Matching is conservative and targets obvious test markers such as `example.com`, `127.0.0.1`, `run_id=`, verification titles, Batch tx titles, and Schema tightening titles.
+  - Usage is documented in `docs/local_data_maintenance.md`.
+
+### Verification
+
+- Focused checks reported in this round included:
+  - `pytest tests/test_web_ask.py tests/test_web_mvp_acceptance.py -q` with `50 passed`
+  - `pytest tests/test_web_ask.py tests/test_web_mvp_acceptance.py tests/test_web_i18n.py -q` with `53 passed`
+  - `pytest tests/test_web_dashboard_documents.py tests/test_web_mvp_acceptance.py tests/test_web_i18n.py -q` during the page-quality passes
+- A local article import issue was diagnosed as invalid JSON caused by raw newlines inside `content_text`; the corrected file imported successfully through the existing batch entrypoint.
+
+### Important boundary that remains
+
+- Do not reopen these completed display tasks by default:
+  - Dashboard / Documents card layout
+  - AI Settings provider table readability
+  - System / Storage management overview
+  - Sources management table and grouped create form
+- Ask still uses lightweight local retrieval, not advanced RAG or vector-query orchestration.
+- The new Ask `context` field is bounded evidence context, not permission to send complete documents without limits.
+- The cleanup utility must stay conservative. It is for obvious developer/test documents only and must not become a broad corpus-deletion feature.
+- User-local source files such as `local_article/` are personal input data and should not be treated as promoted corpus fixtures by default.
+- Do not modify `src/domain/*`, `src/application/*`, or `src/processing/*` for page-quality follow-ups unless a concrete regression requires it.
+
+### Updated next-session starting point
+
+The project remains in user-trial mode, but the first page-readability and local-evidence issues have been addressed.
+
+Recommended next order:
+
+1. Run the Web app and manually verify the updated Dashboard, Documents, Sources, AI Settings, System, and Ask flows in a browser.
+2. Use `scripts/cleanup_test_documents.py` in dry-run mode to review test-document cleanup candidates before applying any deletion.
+3. Continue importing a small number of real local or external articles.
+4. Ask questions that include the target article title when testing local long-form analysis.
+5. Capture any new issue with page, reproduction steps, expected result, actual result, and severity.
+
+Do not start source discovery, crawler expansion, advanced RAG, production secrets management, or broad schema changes before the next round of real user feedback.

@@ -309,6 +309,38 @@ What this means in practice:
 
 For the latest handoff status and the most reasonable next-session starting point, always prefer [ARCH_CONTEXT.md](./ARCH_CONTEXT.md).
 
+## Latest Status Update (2026-05-02 User Trial Feedback Fixes)
+
+This section supplements the user-trial readiness update above.
+
+- Dashboard Recent Documents and Documents list now use responsive document cards instead of cramped multi-column tables.
+- AI Settings provider list is now a scrollable management table with masked-key-only rendering, status badges, Base URL truncation, and aligned Edit/Test actions.
+- System / Storage now presents storage overview, system checks, database counts, and storage files in a more management-oriented layout.
+- Sources now has a denser source-management table, compact maintenance metadata, badge-like source status signals, horizontal actions, and a grouped create-source form with advanced JSON config separated.
+- Ask / Q&A document evidence now includes bounded document `context` from local `content_text`, and external provider prompts include this context for long local article analysis.
+- A conservative local cleanup utility was added:
+  - `scripts/cleanup_test_documents.py`
+  - dry-run by default
+  - `--apply` required for deletion
+  - documented in [docs/local_data_maintenance.md](./docs/local_data_maintenance.md)
+
+What this means in practice:
+
+- The first user-trial page-readability issues have been addressed.
+- External AI analysis of a local long article should no longer be limited to title plus summary skeleton when local content matches.
+- Developer/test documents can now be reviewed and cleaned from the local database with an explicit dry-run/apply workflow.
+- The project remains in local user-trial mode; next work should still be driven by real usage feedback.
+
+Do not reopen by default:
+
+- Dashboard / Documents table-to-card readability
+- AI Settings provider-table readability
+- System / Storage management overview
+- Sources source-management readability
+- Ask bounded document context for local long-form evidence
+
+For the latest handoff status and the most reasonable next-session starting point, always prefer [ARCH_CONTEXT.md](./ARCH_CONTEXT.md).
+
 ## Latest Status Update (2026-05-01 AI Settings / Browser Smoke)
 
 This section supplements the older update above.

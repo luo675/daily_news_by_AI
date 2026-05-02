@@ -88,6 +88,13 @@ When a page has active filters, the empty state should mention the filter contex
   - summary must prefer reviewed effective summary values
   - time display renders `published_at` first and falls back to `created_at`
   - signal counts are lightweight dashboard hints; unavailable document-level risks render as `0`
+  - recent documents render as a responsive card list
+  - card priority order is:
+    - title
+    - summary
+    - source / status / time
+    - structured signals
+    - detail entrance
   - empty state: `[]`, rendered as `No recent documents available.`
 - `system_status`
   - keys:
@@ -162,8 +169,9 @@ Downgrade rules:
 
 Documents list rendering rules:
 
-- list column order follows detail-page semantics:
-  - `source -> status -> language -> published/created -> summary -> signals -> detail`
+- list renders as a responsive card list
+- card priority order follows detail-page semantics:
+  - `title -> summary -> source -> status -> language -> published/created -> signals -> detail`
 - time column renders `published_at` first and falls back to `created_at`
 - signals column renders lightweight counts for opportunities, risks, and uncertainties
 - detail column links to `/web/documents/{document_id}`
@@ -247,22 +255,33 @@ Downgrade rules:
 Sources rendering rules:
 
 - list and detail pages read from source page view dicts, not ORM attributes
-- list view columns show:
+- list view stays a backend table wrapped in a horizontal scroll container
+- list view priority is:
   - source name
-  - source type
   - URL
-  - credibility level
-  - enabled/disabled status chip
-  - Web maintenance metadata
+  - source type / credibility / active state / maintenance status badges
+  - compact Web maintenance metadata
   - actions
 - list source-name cells also show source notes with `-` fallback; user-entered names, URLs, notes, and metadata values are not translated
-- source type and credibility level are rendered as lightweight scan chips
-- `Source.config["_web"]` is read only for existing lightweight maintenance display; known standard fields are `maintenance_status`, `notes`, `last_import_at`, and `last_result`, and any additional non-empty keys are displayed as metadata rows
+- URL cells are single-line truncated fields so long sources do not widen the table
+- source type, credibility level, active/disabled state, and maintenance status are rendered as badges
+- `Source.config["_web"]` is read only for existing lightweight maintenance display; known standard fields are `last_import_at` and `last_result`, and any additional non-empty keys are displayed as compact metadata rows
 - empty list state -> `No sources available. Add a manually maintained source or check the database connection.`
 - DB degradation note uses the shared database-note wording
 - detail page maintenance status and activity label must use the same contract fields shown in the list
 - the Sources page does not create a formal schema for `Source.config["_web"]`
 - the Sources page does not add source discovery, crawling, registry expansion, migrations, or new CRUD flows beyond existing edit/detail/toggle/import entry points
+
+Sources create form rendering rules:
+
+- the create form is grouped into:
+  - basic information: name, URL
+  - classification and credibility: source type, credibility level
+  - fetching and maintenance: fetch strategy, maintenance status, active state, notes
+  - advanced configuration: `config_json`
+- `config_json` is rendered inside a closed `<details>` block by default
+- field names stay unchanged so `service.create_source(...)` continues to receive the same payload keys
+- the create form keeps the ordinary web shell copy behavior for `?lang=en` and default Chinese pages
 
 ## AI Settings Contract
 
@@ -288,6 +307,17 @@ AI Settings list rules:
 
 - empty state: `No AI provider configured.`
 - rows show `masked_key` only; raw `api_key` must never be interpolated into HTML, even though the service layer still carries the stored key
+- the provider table is wrapped in a horizontal scroll container so narrow screens do not stack fields vertically
+- list priority order is:
+  - `name`
+  - `base_url`
+  - `model`
+  - `masked_key`
+  - `enabled / default / last_test_status`
+  - `edit / test actions`
+- `base_url` is rendered as a single-line truncated field to avoid layout overflow
+- `is_enabled`, `is_default`, and `last_test_status` render as badges rather than raw booleans
+- edit and test actions render as horizontally aligned controls with consistent sizing
 - the edit action links to the detail page for the same provider
 - the test action posts to the provider test endpoint
 - the table keeps the DB-first + JSON fallback storage strategy unchanged
@@ -560,6 +590,16 @@ System / Storage terminology:
 Rendering rules:
 
 - the page reads only from `get_system_page_data()`
+- the page renders as a three-column management layout:
+  - left column: `Storage Overview`
+  - middle column: `System Checks`
+  - right column: `Database Counts`
 - degraded probe results are shown through `status=degraded` plus the returned detail
 - counts degradation additionally shows the shared database note
+- system checks render `available` / `degraded` as badges or equivalent visual labels
+- database counts render as statistic cards with prominent numbers rather than a plain table
+- storage overview uses `_system_storage_text(...)` output only and does not expose raw configuration keys
+- storage files remain tabular, but the table is wrapped in a horizontal scroll container
+- storage file paths are truncated to a single line and file sizes are formatted for readability
+- storage file existence renders as a badge rather than raw text
 - storage overview is informational only and does not change storage strategy

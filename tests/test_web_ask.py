@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 import uuid
 from datetime import datetime, timezone
@@ -52,17 +53,23 @@ def _build_provider() -> ProviderConfig:
     )
 
 
-def _build_document(*, key_points: list[str] | None = None) -> Document:
+def _build_document(
+    *,
+    key_points: list[str] | None = None,
+    title: str = "Weekly AI coding tools update",
+    content_text: str = "AI coding tools changed this week with new code review and editing workflows.",
+    summary_en: str = "This document summarizes changes in AI coding tools.",
+) -> Document:
     document = Document(
         id=uuid.uuid4(),
-        title="Weekly AI coding tools update",
-        content_text="AI coding tools changed this week with new code review and editing workflows.",
+        title=title,
+        content_text=content_text,
         url="https://example.com/ai-coding-tools",
         created_at=datetime.now(timezone.utc),
     )
     document.source = Source(name="Example Source")
     document.summary = DocumentSummary(
-        summary_en="This document summarizes changes in AI coding tools.",
+        summary_en=summary_en,
         key_points=key_points or [],
     )
     return document
@@ -1141,6 +1148,72 @@ def test_ask_question_does_not_fake_key_point_match(monkeypatch, workspace_tmp_p
     assert external_calls["count"] == 1
 
 
+def test_ask_question_includes_document_context_for_long_local_articles(
+    monkeypatch,
+    workspace_tmp_path: Path,
+) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    service = WebMvpService()
+    provider = _build_provider()
+    long_content = (
+        "Opening filler that is not the main idea. " * 40
+        + "The main idea is that Something Big Is Happening needs local document context, "
+        "not just a skeletal summary, for correct reasoning. "
+        + "More unrelated detail follows. " * 60
+    )
+    document = _build_document(
+        title="Something Big Is Happening",
+        content_text=long_content,
+        summary_en="A skeletal summary with little substantive detail.",
+        key_points=[],
+    )
+    captured_request: dict[str, object] = {}
+
+    monkeypatch.setattr(service, "list_ai_providers", lambda: [provider])
+    monkeypatch.setattr(service, "search_documents_for_question", lambda question: ([document], None))
+    monkeypatch.setattr(service, "search_briefs_for_question", lambda question: ([], None), raising=False)
+
+    class _FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+        def read(self):
+            return b'{"choices": [{"message": {"content": "External answer using local context."}}]}'
+
+    def _capture_request(req, timeout=25):
+        captured_request["body"] = req.data
+        return _FakeResponse()
+
+    class _FakeDatabaseReviewService:
+        def __init__(self, session):
+            self.session = session
+
+        def get_effective_value(self, target_type, target_id, field_name, auto_value=None):
+            return auto_value
+
+    monkeypatch.setattr(service, "_try_create_db_session", lambda: _DummySession())
+    monkeypatch.setattr("src.web.service.DatabaseReviewService", _FakeDatabaseReviewService)
+    monkeypatch.setattr(web_service_module.request, "urlopen", _capture_request)
+
+    result = service.ask_question("What is the main idea?")
+
+    assert result["answer_mode"] == "local_with_external_reasoning"
+    assert result["provider_name"] == provider.name
+    assert result["evidence"][0]["title"] == "Something Big Is Happening"
+    assert result["evidence"][0]["match_basis"] == "content"
+    assert "The main idea is that Something Big Is Happening needs local document context" in result["evidence"][0]["context"]
+    assert len(result["evidence"][0]["context"]) <= 2000
+    assert len(result["evidence"][0]["snippet"]) < len(result["evidence"][0]["context"])
+
+    payload = json.loads(captured_request["body"].decode("utf-8"))
+    user_message = payload["messages"][1]["content"]
+    assert "The main idea is that Something Big Is Happening needs local document context" in user_message
+    assert "Context:" in user_message
+
+
 def test_ask_question_adds_reviewed_brief_risk_and_uncertainty_evidence(
     monkeypatch,
     workspace_tmp_path: Path,
@@ -1358,6 +1431,29 @@ def test_ai_provider_edit_page_hides_plaintext_key_in_english(monkeypatch, works
     assert "/web/ai-settings?lang=en" in response.text
     assert "/web/ai-settings/provider-1/test?lang=en" in response.text
     assert "Back to AI Settings" in response.text
+
+
+def test_ai_settings_list_page_uses_scrollable_table_badges_and_masked_key(monkeypatch, workspace_tmp_path: Path) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    provider = _build_provider()
+    provider.base_url = "https://example.com/v1/very/long/path/that/should/not/stretch/the/table/layout/at/all"
+    monkeypatch.setattr(web_routes.service, "list_ai_providers", lambda: [provider])
+
+    client = TestClient(create_app())
+    response = client.get("/web/ai-settings?lang=en")
+
+    assert response.status_code == 200
+    assert "Configured Providers" in response.text
+    assert "table-scroll" in response.text
+    assert "provider-table" in response.text
+    assert "badge-success" in response.text
+    assert "badge-info" in response.text
+    assert "action-button" in response.text
+    assert "truncate" in response.text
+    assert provider.masked_key in response.text
+    assert "secret-key" not in response.text
+    assert "/web/ai-settings/provider-1?lang=en" in response.text
+    assert "/web/ai-settings/provider-1/test?lang=en" in response.text
 
 
 def test_list_ai_providers_reads_from_db(monkeypatch, workspace_tmp_path: Path) -> None:

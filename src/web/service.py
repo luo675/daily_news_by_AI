@@ -1465,6 +1465,7 @@ class WebMvpService:
                 summary_text=summary_text,
                 review_service=review_service,
             )
+            context = self._build_document_context(document, question_terms, limit=2000)
             evidence.append(
                 {
                     "evidence_type": "document",
@@ -1473,6 +1474,7 @@ class WebMvpService:
                     "source": document.source.name if document.source else None,
                     "summary": rendered_summary,
                     "snippet": snippet,
+                    "context": context,
                     "match_basis": match_basis,
                     "matched_terms": matched_terms,
                     "score": score,
@@ -1540,8 +1542,9 @@ class WebMvpService:
             summary_text if summary_text is not None else self._build_summary_text(document, review_service)
         )
         if effective_summary:
-            summary_snippet = self._clip_matching_text(effective_summary, question_terms, default_size=220)
-            if summary_snippet:
+            summary_lower = effective_summary.lower()
+            if any(term.lower() in summary_lower for term in question_terms):
+                summary_snippet = self._clip_matching_text(effective_summary, question_terms, default_size=220)
                 return summary_snippet, effective_summary, "summary"
 
         content_snippet = self._clip_matching_text(document.content_text or "", question_terms, default_size=220)
@@ -1550,6 +1553,36 @@ class WebMvpService:
 
         fallback = effective_summary or self._clip_matching_text(document.content_text or "", question_terms, default_size=220)
         return fallback, effective_summary or None, "fallback"
+
+    def _build_document_context(
+        self,
+        document: Document,
+        question_terms: list[str],
+        *,
+        limit: int = 2000,
+    ) -> str:
+        content = (document.content_text or "").replace("\r\n", "\n").replace("\n", " ").strip()
+        if not content:
+            return ""
+        if len(content) <= limit:
+            return content
+
+        lowered = content.lower()
+        match_index = -1
+        for term in question_terms:
+            index = lowered.find(term.lower())
+            if index >= 0:
+                match_index = index
+                break
+
+        if match_index < 0:
+            return content[:limit].strip()
+
+        start = max(0, match_index - (limit // 2))
+        end = min(len(content), start + limit)
+        if end - start < limit and start > 0:
+            start = max(0, end - limit)
+        return content[start:end].strip()
 
     def _build_local_answer(self, question: str, evidence: list[dict[str, Any]], sufficiency_note: str) -> str:
         if not evidence:
@@ -1603,7 +1636,8 @@ class WebMvpService:
                 f"Title: {item['title']}\n"
                 f"Source: {item.get('source') or 'unknown'}\n"
                 f"Match basis: {item.get('match_basis') or 'unknown'}\n"
-                f"Snippet: {item.get('snippet') or item.get('summary') or ''}"
+                f"Snippet: {item.get('snippet') or item.get('summary') or ''}\n"
+                f"Context: {item.get('context') or ''}"
             )
         payload = {
             "model": provider.model,
@@ -2119,6 +2153,13 @@ class WebMvpService:
         if not evidence:
             return False, "No local evidence matched the question."
 
+        content_items = [
+            item
+            for item in evidence
+            if item.get("match_basis") == "content"
+            and int(item.get("score", 0)) >= 2
+            and str(item.get("context") or "").strip()
+        ]
         strong_items = [
             item
             for item in evidence
@@ -2130,6 +2171,8 @@ class WebMvpService:
             return True, "Multiple local evidence items matched the question."
         if strong_items and total_matched_terms >= 2 and strong_items[0].get("match_basis") in {"key_point", "summary"}:
             return True, "A focused local summary/key-point match was found."
+        if content_items and total_matched_terms >= 1:
+            return True, "A local content match with document context was found."
         return False, "Only weak or partial local evidence was found."
 
     def _build_opportunity_review_view(

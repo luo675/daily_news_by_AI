@@ -220,18 +220,318 @@ def _render_document_signal_chips(request: Request, document: dict[str, object])
     )
 
 
-def _render_source_metadata(request: Request, source: dict[str, object]) -> str:
+def _render_status_badge(label: str, *, variant: str = "neutral") -> str:
+    text = str(label or "-").strip() or "-"
+    return f"<span class='badge badge-{escape(variant)}'>{escape(text)}</span>"
+
+
+def _render_ai_provider_row(request: Request, provider: object) -> str:
+    provider_id = str(getattr(provider, "id"))
+    name = str(getattr(provider, "name", "") or "-").strip() or "-"
+    base_url = str(getattr(provider, "base_url", "") or "").strip() or "-"
+    model = str(getattr(provider, "model", "") or "").strip() or "-"
+    masked_key = str(getattr(provider, "masked_key", "") or "").strip() or "-"
+    is_enabled = bool(getattr(provider, "is_enabled", False))
+    is_default = bool(getattr(provider, "is_default", False))
+    last_test_status = str(getattr(provider, "last_test_status", "") or "").strip() or "-"
+    status_variant = {
+        "valid": "success",
+        "passed": "success",
+        "ready": "success",
+        "incomplete": "warning",
+        "warning": "warning",
+        "failed": "danger",
+        "error": "danger",
+        "unavailable": "danger",
+    }.get(last_test_status.lower(), "neutral")
+    edit_href = escape(_ai_settings_url(request, f"/web/ai-settings/{provider_id}"))
+    test_href = escape(_ai_settings_url(request, f"/web/ai-settings/{provider_id}/test"))
+    return (
+        "<tr>"
+        f"<td class='provider-name-cell'><div class='provider-name'>{escape(name)}</div></td>"
+        f"<td class='provider-base-url-cell'><span class='truncate' title='{escape(base_url)}'>{escape(base_url)}</span></td>"
+        f"<td class='provider-model-cell'>{escape(model)}</td>"
+        f"<td class='provider-key-cell'><span class='mono'>{escape(masked_key)}</span></td>"
+        f"<td class='provider-badges-cell'><div class='chips provider-badges'>"
+        f"{_render_status_badge('enabled' if is_enabled else 'disabled', variant='success' if is_enabled else 'neutral')}"
+        f"{_render_status_badge('default' if is_default else 'secondary', variant='info' if is_default else 'neutral')}"
+        f"{_render_status_badge(last_test_status, variant=status_variant)}"
+        f"</div></td>"
+        f"<td class='provider-actions-cell'><div class='action-group'>"
+        f"<a class='action-button nav-link' href='{edit_href}'>{escape(_text(request, 'page.ai_settings.action.edit'))}</a>"
+        f"<form method='post' action='{test_href}'><button class='action-button' type='submit'>{escape(_text(request, 'page.ai_settings.action.test'))}</button></form>"
+        f"</div></td>"
+        "</tr>"
+    )
+
+
+def _format_file_size(value: object) -> str:
+    try:
+        size = int(value)
+    except (TypeError, ValueError):
+        return "-"
+    if size < 0:
+        return "-"
+    units = ["B", "KB", "MB", "GB", "TB"]
+    amount = float(size)
+    unit = 0
+    while amount >= 1024 and unit < len(units) - 1:
+        amount /= 1024.0
+        unit += 1
+    if unit == 0:
+        return f"{int(amount)} {units[unit]}"
+    return f"{amount:.1f} {units[unit]}"
+
+
+def _render_file_exists_badge(request: Request, value: object) -> str:
+    text = str(value or "").strip().lower()
+    if text == "yes":
+        return _render_status_badge(_text(request, "shared.file_exists_yes", "yes"), variant="success")
+    if text == "no":
+        return _render_status_badge(_text(request, "shared.file_exists_no", "no"), variant="danger")
+    return _render_status_badge("-", variant="neutral")
+
+
+def _render_system_check_card(request: Request, item: dict[str, object]) -> str:
+    status = str(item.get("status") or "").strip().lower() or "-"
+    variant = "success" if status == "available" else "warning" if status == "degraded" else "neutral"
+    status_label = status if status != "-" else "-"
+    detail = str(item.get("detail") or "-").strip() or "-"
+    return (
+        "<article class='system-check-card'>"
+        f"<div class='system-card-head'><div class='system-card-title'>{escape(str(item.get('label') or '-'))}</div>"
+        f"{_render_status_badge(status_label, variant=variant)}</div>"
+        f"<div class='muted system-card-detail'>{escape(detail)}</div>"
+        "</article>"
+    )
+
+
+def _render_database_count_card(request: Request, item: dict[str, object]) -> str:
+    name = str(item.get("name") or "-").strip() or "-"
+    label_map = {
+        "sources": _text(request, "page.dashboard.sources"),
+        "documents": _text(request, "page.dashboard.documents"),
+        "watchlist": _text(request, "page.dashboard.watchlist"),
+        "reviews": _text(request, "page.dashboard.review_edits"),
+    }
+    label = label_map.get(name, name.replace("_", " ").title())
+    count = str(item.get("count") if item.get("count") is not None else 0)
+    return (
+        "<article class='system-count-card'>"
+        f"<div class='muted system-count-label'>{escape(label)}</div>"
+        f"<div class='system-count-value'>{escape(count)}</div>"
+        "</article>"
+    )
+
+
+def _render_storage_overview_card(request: Request, item: dict[str, object]) -> str:
+    title = _system_storage_text(request, item.get("area_key"))
+    primary = _system_storage_text(request, item.get("primary_key"))
+    fallback = _system_storage_text(request, item.get("fallback_key"))
+    detail = _system_storage_text(request, item.get("detail_key"))
+    path = str(item.get("path") or "-").strip() or "-"
+    return (
+        "<article class='system-storage-card'>"
+        f"<div class='system-card-head'><div class='system-card-title'>{escape(title)}</div></div>"
+        "<div class='system-kv-grid'>"
+        f"<div><span class='system-kv-label'>{escape(_text(request, 'page.system.col.primary'))}</span><span class='system-kv-value'>{escape(primary)}</span></div>"
+        f"<div><span class='system-kv-label'>{escape(_text(request, 'page.system.col.fallback'))}</span><span class='system-kv-value'>{escape(fallback)}</span></div>"
+        f"<div><span class='system-kv-label'>{escape(_text(request, 'page.system.col.detail'))}</span><span class='system-kv-value'>{escape(detail)}</span></div>"
+        f"<div><span class='system-kv-label'>{escape(_text(request, 'page.system.col.path'))}</span><span class='system-kv-value mono truncate' title='{escape(path)}'>{escape(path)}</span></div>"
+        "</div>"
+        "</article>"
+    )
+
+
+def _render_source_badges(request: Request, source: dict[str, object]) -> str:
+    source_type = str(source.get("source_type") or "-").strip() or "-"
+    credibility_level = str(source.get("credibility_level") or "-").strip() or "-"
+    activity_label = str(source.get("activity_label") or "disabled").strip() or "disabled"
+    maintenance_status = str(source.get("maintenance_status") or "ordinary").strip() or "ordinary"
+    badges = [
+        _render_status_badge(source_type, variant="info" if source_type != "-" else "neutral"),
+        _render_status_badge(credibility_level, variant="success" if credibility_level != "-" else "neutral"),
+        _render_status_badge(
+            activity_label,
+            variant="success" if activity_label == "enabled" else "danger" if activity_label == "disabled" else "neutral",
+        ),
+        _render_status_badge(maintenance_status, variant="warning" if maintenance_status != "ordinary" else "neutral"),
+    ]
+    return f"<div class='chips source-badge-list'>{''.join(badges)}</div>"
+
+
+def _render_source_maintenance_summary(request: Request, source: dict[str, object]) -> str:
     rows: list[tuple[str, object]] = [
-        (_text(request, "page.sources.col.fetch"), source.get("fetch_strategy")),
-        (_text(request, "page.sources.maintenance_status"), source.get("maintenance_status")),
-        (_text(request, "page.sources.col.last_import"), source.get("last_import_at")),
-        (_text(request, "page.sources.col.last_result"), source.get("last_result")),
+        (_text(request, "page.sources.label.last_import"), source.get("last_import_at")),
+        (_text(request, "page.sources.label.last_result"), source.get("last_result")),
     ]
     web_metadata = source.get("web_metadata")
     if isinstance(web_metadata, dict):
         rows.extend((str(key), value) for key, value in web_metadata.items())
-    rendered = _render_text_rows(rows)
-    return rendered or "-"
+    parts = ["<div class='source-maintenance-summary'>"]
+    for label, value in rows:
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        parts.append(
+            "<div class='source-maintenance-item'>"
+            f"<span class='source-maintenance-label'>{escape(label)}</span>"
+            f"<span class='source-maintenance-value'>{escape(_render_value(value))}</span>"
+            "</div>"
+        )
+    if len(parts) == 1:
+        return "<div class='source-maintenance-summary'><div class='muted'>-</div></div>"
+    parts.append("</div>")
+    return "".join(parts)
+
+
+def _render_source_row(request: Request, source: dict[str, object]) -> str:
+    source_id = escape(str(source["id"]))
+    url = str(source.get("url") or "-").strip() or "-"
+    notes = str(source.get("notes") or "-").strip() or "-"
+    return (
+        "<tr>"
+        f"<td class='source-name-cell'><a class='source-name' href='/web/sources/{source_id}'>{escape(str(source['name']))}</a>"
+        f"<div class='muted source-note'>{escape(_text(request, 'page.sources.label.notes'))}: {escape(notes)}</div></td>"
+        f"<td class='source-url-cell'><span class='truncate mono' title='{escape(url)}'>{escape(url)}</span></td>"
+        f"<td class='source-badges-cell'>{_render_source_badges(request, source)}</td>"
+        f"<td class='source-maintenance-cell'>{_render_source_maintenance_summary(request, source)}</td>"
+        f"<td class='source-actions-cell'>"
+        f"<div class='action-group'>"
+        f"<a class='action-button nav-link' href='/web/sources/{source_id}'>{escape(_text(request, 'page.sources.action.edit'))}</a>"
+        f"<form method='post' action='/web/sources/{source_id}/toggle'><button class='action-button' type='submit'>{escape(_text(request, 'page.sources.action.toggle'))}</button></form>"
+        f"<form method='post' action='/web/sources/{source_id}/import'><button class='action-button' type='submit'>{escape(_text(request, 'page.sources.action.import'))}</button></form>"
+        f"</div>"
+        "</td>"
+        "</tr>"
+    )
+
+
+def _source_section_title(request: Request, zh: str, en: str) -> str:
+    return zh if _i18n(request).lang == "zh" else en
+
+
+def _render_source_form_section(request: Request) -> str:
+    source_type_options = "".join(
+        f"<option value='{escape(value)}'>{escape(value)}</option>" for value in service.list_source_type_values()
+    )
+    credibility_options = "".join(
+        f"<option value='{escape(value)}'>{escape(value)}</option>" for value in service.list_credibility_values()
+    )
+    maintenance_status_options = "".join(
+        f"<option value='{escape(value)}'>{escape(value)}</option>"
+        for value in service.list_web_assignable_maintenance_status_values()
+    )
+    return f"""
+    <section class="card source-form-card">
+      <h2>{escape(_text(request, "page.sources.add"))}</h2>
+      <p class="muted">{escape(_text(request, "page.sources.intro"))}</p>
+      <form method="post" action="/web/sources" class="source-form">
+        <section class="source-form-group">
+          <h3>{escape(_source_section_title(request, "基础信息", "Basic information"))}</h3>
+          <div class="source-form-grid">
+            <div class="source-form-field">
+              <span class="muted">{escape(_text(request, "page.sources.label.source"))}</span>
+              <input name="name" placeholder="{escape(_text(request, 'page.sources.placeholder.name'))}" required>
+            </div>
+            <div class="source-form-field">
+              <span class="muted">URL</span>
+              <input name="url" placeholder="{escape(_text(request, 'page.sources.placeholder.url'))}">
+            </div>
+          </div>
+        </section>
+        <section class="source-form-group">
+          <h3>{escape(_source_section_title(request, "分类与可信度", "Classification and credibility"))}</h3>
+          <div class="source-form-grid">
+            <div class="source-form-field">
+              <span class="muted">{escape(_text(request, "page.sources.col.type"))}</span>
+              <select name="source_type">{source_type_options}</select>
+            </div>
+            <div class="source-form-field">
+              <span class="muted">{escape(_text(request, "page.sources.col.cred"))}</span>
+              <select name="credibility_level">{credibility_options}</select>
+            </div>
+          </div>
+        </section>
+        <section class="source-form-group">
+          <h3>{escape(_source_section_title(request, "采集与维护", "Fetching and maintenance"))}</h3>
+          <div class="source-form-grid">
+            <div class="source-form-field">
+              <span class="muted">{escape(_text(request, "page.sources.col.fetch"))}</span>
+              <input name="fetch_strategy" value="manual" placeholder="{escape(_text(request, 'page.sources.placeholder.fetch_strategy'))}">
+            </div>
+            <div class="source-form-field">
+              <span class="muted">{escape(_text(request, "page.sources.maintenance_status"))}</span>
+              <select name="maintenance_status">{maintenance_status_options}</select>
+            </div>
+            <div class="source-form-field">
+              <span class="muted">{escape(_text(request, "page.sources.active"))}</span>
+              <div class="inline"><input type="checkbox" name="is_active" checked> {escape(_text(request, "page.sources.active"))}</div>
+            </div>
+            <div class="source-form-field source-form-field--full">
+              <span class="muted">{escape(_text(request, "page.sources.label.notes"))}</span>
+              <textarea name="notes" placeholder="{escape(_text(request, 'page.sources.placeholder.notes'))}"></textarea>
+            </div>
+          </div>
+        </section>
+        <details class="source-config-details">
+          <summary>{escape(_source_section_title(request, "高级配置", "Advanced configuration"))}</summary>
+          <textarea name="config_json" placeholder="{escape(_text(request, 'page.sources.placeholder.config_json'))}"></textarea>
+        </details>
+        <button>{escape(_text(request, "page.sources.create"))}</button>
+      </form>
+    </section>
+    """
+
+
+def _render_document_card(
+    request: Request,
+    document: dict[str, object],
+    *,
+    section: str,
+    include_language: bool = False,
+    detail_href: str | None = None,
+    detail_label: str | None = None,
+) -> str:
+    title = str(document.get("title") or "-").strip() or "-"
+    summary_text = str(document.get("summary_text") or "-").strip() or "-"
+    meta_rows: list[tuple[str, object]] = [
+        (_text(request, f"{section}.col.source"), document.get("source_name")),
+        (_text(request, f"{section}.col.status"), document.get("status")),
+    ]
+    if include_language:
+        meta_rows.append((_text(request, f"{section}.col.language"), document.get("language")))
+    meta_rows.append((_text(request, f"{section}.col.time"), _document_time_value(document)))
+    meta_html = _render_text_rows(meta_rows)
+    signals_label = _text(request, f"{section}.col.signals")
+    signals_html = _render_document_signal_chips(request, document)
+    detail_html = ""
+    if detail_href:
+        label = detail_label or _text(request, "page.documents.detail")
+        detail_html = (
+            f"<div class='document-actions'>"
+            f"<a class='nav-link' href='{escape(detail_href)}'>{escape(label)}</a>"
+            f"</div>"
+        )
+    return (
+        "<article class='document-card'>"
+        "<div class='document-card__main'>"
+        f"<h3 class='document-title'><a href='{escape(detail_href or '#')}'>{escape(title)}</a></h3>"
+        f"<div class='document-summary'>{escape(summary_text)}</div>"
+        "</div>"
+        "<div class='document-card__side'>"
+        f"<div class='document-meta'>{meta_html}</div>"
+        f"<div class='document-section-label muted'>{escape(signals_label)}</div>"
+        f"<div class='chips document-signals'>{signals_html}</div>"
+        f"{detail_html}"
+        "</div>"
+        "</article>"
+    )
+
+
+def _render_source_metadata(request: Request, source: dict[str, object]) -> str:
+    return _render_source_maintenance_summary(request, source)
 
 
 def _document_time_value(document: dict[str, object]) -> str:
@@ -446,6 +746,324 @@ def _layout(request: Request, title: str, body: str, message: str | None = None)
         .chip {{
           display: inline-block; padding: 4px 10px; border-radius: 999px; background: #efe8dc; color: #5f503e;
         }}
+        .badge {{
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          min-height: 26px;
+          padding: 4px 10px;
+          border-radius: 999px;
+          border: 1px solid transparent;
+          font-size: 0.82rem;
+          line-height: 1;
+          white-space: nowrap;
+        }}
+        .badge-success {{ background: #e5f5ec; color: #14532d; border-color: #b7dfc7; }}
+        .badge-info {{ background: #e8f1fb; color: #1d4ed8; border-color: #bfd6f8; }}
+        .badge-warning {{ background: #fff7e6; color: #92400e; border-color: #f5d49f; }}
+        .badge-danger {{ background: #fde8e8; color: #991b1b; border-color: #f3b4b4; }}
+        .badge-neutral {{ background: #efe8dc; color: #5f503e; border-color: #ded2c3; }}
+        .truncate {{
+          display: block;
+          max-width: 100%;
+          overflow: hidden;
+          white-space: nowrap;
+          text-overflow: ellipsis;
+        }}
+        .mono {{
+          font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        }}
+        .table-scroll {{
+          overflow-x: auto;
+          -webkit-overflow-scrolling: touch;
+        }}
+        .data-table {{
+          width: 100%;
+          min-width: 1040px;
+          border-collapse: collapse;
+          table-layout: fixed;
+        }}
+        .data-table th,
+        .data-table td {{
+          text-align: left;
+          padding: 10px 8px;
+          border-bottom: 1px solid var(--line);
+          vertical-align: top;
+          overflow-wrap: anywhere;
+        }}
+        .data-table thead th {{
+          position: sticky;
+          top: 0;
+          background: var(--panel);
+          z-index: 1;
+        }}
+        .action-group {{
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+          align-items: center;
+        }}
+        .action-button {{
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          min-height: 36px;
+          padding: 8px 14px;
+          border-radius: 10px;
+        }}
+        .action-group form {{
+          display: inline-flex;
+          width: auto;
+        }}
+        .action-group button {{
+          width: auto;
+        }}
+        .provider-name-cell {{
+          min-width: 0;
+        }}
+        .provider-name {{
+          font-weight: 600;
+          overflow-wrap: anywhere;
+        }}
+        .provider-base-url-cell {{
+          min-width: 0;
+        }}
+        .provider-model-cell,
+        .provider-key-cell {{
+          white-space: nowrap;
+        }}
+        .provider-badges {{
+          gap: 8px;
+        }}
+        .provider-actions-cell {{
+          min-width: 180px;
+        }}
+        .source-table {{
+          min-width: 1160px;
+          table-layout: fixed;
+        }}
+        .source-name-cell,
+        .source-url-cell,
+        .source-badges-cell,
+        .source-maintenance-cell,
+        .source-actions-cell {{
+          min-width: 0;
+        }}
+        .source-name {{
+          font-weight: 600;
+          overflow-wrap: anywhere;
+          word-break: normal;
+        }}
+        .source-note {{
+          margin-top: 4px;
+          line-height: 1.45;
+        }}
+        .source-badge-list {{
+          gap: 8px;
+        }}
+        .source-maintenance-summary {{
+          display: grid;
+          gap: 8px;
+        }}
+        .source-maintenance-item {{
+          display: grid;
+          gap: 3px;
+        }}
+        .source-maintenance-label {{
+          color: var(--muted);
+          font-size: 0.88rem;
+        }}
+        .source-maintenance-value {{
+          overflow-wrap: anywhere;
+          line-height: 1.45;
+        }}
+        .source-actions-cell {{
+          min-width: 200px;
+        }}
+        .source-form {{
+          display: grid;
+          gap: 14px;
+        }}
+        .source-form-group {{
+          display: grid;
+          gap: 12px;
+          padding: 12px;
+          border: 1px solid var(--line);
+          border-radius: 12px;
+          background: #fcfaf5;
+        }}
+        .source-form-group h3 {{
+          margin: 0;
+          font-size: 1rem;
+        }}
+        .source-form-grid {{
+          display: grid;
+          gap: 10px;
+          grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        }}
+        .source-form-field {{
+          display: grid;
+          gap: 6px;
+          min-width: 0;
+        }}
+        .source-form-field--full {{
+          grid-column: 1 / -1;
+        }}
+        .source-config-details {{
+          border: 1px solid var(--line);
+          border-radius: 12px;
+          padding: 12px;
+          background: #fcfaf5;
+        }}
+        .source-config-details summary {{
+          cursor: pointer;
+          font-weight: 600;
+        }}
+        .source-config-details textarea {{
+          margin-top: 10px;
+        }}
+        .system-top-grid {{
+          display: grid;
+          gap: 16px;
+          grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 0.85fr);
+          align-items: start;
+        }}
+        .system-section {{
+          display: grid;
+          gap: 12px;
+        }}
+        .system-card-stack {{
+          display: grid;
+          gap: 12px;
+        }}
+        .system-storage-card,
+        .system-check-card,
+        .system-count-card {{
+          background: #fcfaf5;
+          border: 1px solid var(--line);
+          border-radius: 12px;
+          padding: 12px;
+        }}
+        .system-card-head {{
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          gap: 10px;
+          margin-bottom: 8px;
+        }}
+        .system-card-title {{
+          font-weight: 600;
+          line-height: 1.35;
+          overflow-wrap: anywhere;
+        }}
+        .system-card-detail {{
+          overflow-wrap: anywhere;
+          line-height: 1.5;
+        }}
+        .system-kv-grid {{
+          display: grid;
+          gap: 8px;
+        }}
+        .system-kv-grid > div {{
+          display: grid;
+          gap: 4px;
+        }}
+        .system-kv-label {{
+          color: var(--muted);
+          font-size: 0.88rem;
+        }}
+        .system-kv-value {{
+          overflow-wrap: anywhere;
+          line-height: 1.45;
+        }}
+        .system-count-grid {{
+          display: grid;
+          gap: 12px;
+          grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+        }}
+        .system-count-card {{
+          min-height: 110px;
+          display: grid;
+          align-content: space-between;
+        }}
+        .system-count-label {{
+          overflow-wrap: anywhere;
+        }}
+        .system-count-value {{
+          font-size: 2rem;
+          font-weight: 700;
+          line-height: 1;
+        }}
+        .system-files-table {{
+          min-width: 760px;
+          table-layout: fixed;
+        }}
+        .system-files-table .path-cell {{
+          min-width: 0;
+        }}
+        .system-files-table .size-cell,
+        .system-files-table .exists-cell {{
+          white-space: nowrap;
+        }}
+        .document-list {{ display: grid; gap: 14px; }}
+        .document-card {{
+          display: grid;
+          grid-template-columns: minmax(0, 2.4fr) minmax(260px, 1fr);
+          gap: 16px;
+          align-items: start;
+        }}
+        .document-card__main,
+        .document-card__side {{ min-width: 0; }}
+        .document-title {{
+          margin: 0 0 10px;
+          font-size: 1.08rem;
+          line-height: 1.35;
+          overflow-wrap: anywhere;
+          word-break: normal;
+        }}
+        .document-title a {{
+          color: inherit;
+          overflow-wrap: anywhere;
+          word-break: normal;
+        }}
+        .document-summary {{
+          white-space: pre-wrap;
+          overflow-wrap: anywhere;
+          color: var(--ink);
+          line-height: 1.55;
+        }}
+        .document-meta {{
+          display: grid;
+          gap: 8px;
+          margin-bottom: 12px;
+        }}
+        .document-meta > div {{
+          overflow-wrap: anywhere;
+        }}
+        .document-signals {{
+          margin-bottom: 12px;
+        }}
+        .document-section-label {{
+          margin-bottom: 6px;
+          font-size: 0.9rem;
+        }}
+        .document-actions {{
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+        }}
+        .document-actions .nav-link {{
+          display: inline-flex;
+          width: auto;
+        }}
+        @media (max-width: 760px) {{
+          .system-top-grid {{
+            grid-template-columns: 1fr;
+          }}
+          .document-card {{
+            grid-template-columns: 1fr;
+          }}
+        }}
         .ask-section {{ display: grid; gap: 10px; margin-bottom: 14px; }}
         .ask-section:last-child {{ margin-bottom: 0; }}
         .ask-status {{
@@ -507,14 +1125,15 @@ async def dashboard(request: Request, message: str | None = None) -> HTMLRespons
     counts = data["counts"]
     system_status = data.get("system_status") or {}
     docs_html = "".join(
-        f"<tr><td><a href='/web/documents/{escape(str(doc['id']))}'>{escape(str(doc['title']))}</a></td>"
-        f"<td>{escape(str(doc['source_name']))}</td>"
-        f"<td>{escape(str(doc.get('status', '-')))}</td>"
-        f"<td>{escape(_document_time_value(doc))}</td>"
-        f"<td>{escape(str(doc.get('summary_text', '-')))}</td>"
-        f"<td>{_render_document_signal_chips(request, doc)}</td></tr>"
+        _render_document_card(
+            request,
+            doc,
+            section="page.dashboard",
+            detail_href=f"/web/documents/{escape(str(doc['id']))}",
+            detail_label=_text(request, "page.documents.detail"),
+        )
         for doc in data["recent_documents"]
-    ) or _empty_table_row(_text(request, "shared.no_recent_documents"), colspan=6)
+    ) or f"<div class='card muted'>{escape(_text(request, 'shared.no_recent_documents'))}</div>"
     topics_html = "".join(
         f"<li>{escape(name)} ({count})</li>" for name, count in data["top_topics"]
     ) or _empty_list_item(_text(request, "shared.no_topics"))
@@ -557,10 +1176,7 @@ async def dashboard(request: Request, message: str | None = None) -> HTMLRespons
       {quick_actions_html}
       <section class="card">
         <h2>{escape(_text(request, "page.dashboard.recent_documents"))}</h2>
-        <table>
-          <thead><tr><th>{escape(_text(request, "page.dashboard.col.title"))}</th><th>{escape(_text(request, "page.dashboard.col.source"))}</th><th>{escape(_text(request, "page.dashboard.col.status"))}</th><th>{escape(_text(request, "page.dashboard.col.time"))}</th><th>{escape(_text(request, "page.dashboard.col.summary"))}</th><th>{escape(_text(request, "page.dashboard.col.signals"))}</th></tr></thead>
-          <tbody>{docs_html}</tbody>
-        </table>
+        <div class="document-list">{docs_html}</div>
       </section>
       <section class="card">
         <h2>{escape(_text(request, "page.dashboard.top_topics"))}</h2>
@@ -578,59 +1194,37 @@ async def dashboard(request: Request, message: str | None = None) -> HTMLRespons
 @router.get("/web/sources")
 async def sources_page(request: Request, message: str | None = None) -> HTMLResponse:
     sources, error = service.list_source_page_views()
-    rows = "".join(
-        f"<tr>"
-        f"<td><a href='/web/sources/{escape(str(source['id']))}'><strong>{escape(str(source['name']))}</strong></a>"
-        f"<div class='muted'>{escape(_text(request, 'page.sources.label.notes'))}: {escape(str(source.get('notes') or '-'))}</div></td>"
-        f"<td><span class='chip'>{escape(str(source['source_type']))}</span></td>"
-        f"<td>{escape(str(source['url']))}</td>"
-        f"<td><span class='chip'>{escape(str(source['credibility_level']))}</span></td>"
-        f"<td><span class='chip'>{escape(str(source['activity_label']))}</span></td>"
-        f"<td>{_render_source_metadata(request, source)}</td>"
-        f"<td>"
-        f"<a class='nav-link' href='/web/sources/{escape(str(source['id']))}'>{escape(_text(request, 'page.sources.action.edit'))}</a> "
-        f"<form class='inline' method='post' action='/web/sources/{escape(str(source['id']))}/toggle'><button>{escape(_text(request, 'page.sources.action.toggle'))}</button></form> "
-        f"<form class='inline' method='post' action='/web/sources/{escape(str(source['id']))}/import'><button>{escape(_text(request, 'page.sources.action.import'))}</button></form>"
-        f"</td>"
-        f"</tr>"
-        for source in sources
-    ) or _empty_table_row(_text(request, "page.sources.empty"), colspan=7)
+    rows = "".join(_render_source_row(request, source) for source in sources) or _empty_table_row(
+        _text(request, "page.sources.empty"), colspan=5
+    )
     error_html = _render_database_note(request, error)
-    source_type_options = "".join(
-        f"<option value='{escape(value)}'>{escape(value)}</option>" for value in service.list_source_type_values()
-    )
-    credibility_options = "".join(
-        f"<option value='{escape(value)}'>{escape(value)}</option>" for value in service.list_credibility_values()
-    )
-    maintenance_status_options = "".join(
-        f"<option value='{escape(value)}'>{escape(value)}</option>"
-        for value in service.list_web_assignable_maintenance_status_values()
-    )
     body = f"""
     {error_html}
     <div class="grid cols-2">
-      <section class="card">
-        <h2>{escape(_text(request, "page.sources.add"))}</h2>
-        <p class="muted">{escape(_text(request, "page.sources.intro"))}</p>
-        <form method="post" action="/web/sources">
-          <input name="name" placeholder="{escape(_text(request, 'page.sources.placeholder.name'))}" required>
-          <select name="source_type">{source_type_options}</select>
-          <input name="url" placeholder="{escape(_text(request, 'page.sources.placeholder.url'))}">
-          <select name="credibility_level">{credibility_options}</select>
-          <input name="fetch_strategy" value="manual" placeholder="{escape(_text(request, 'page.sources.placeholder.fetch_strategy'))}">
-          <select name="maintenance_status">{maintenance_status_options}</select>
-          <textarea name="notes" placeholder="{escape(_text(request, 'page.sources.placeholder.notes'))}"></textarea>
-          <textarea name="config_json" placeholder="{escape(_text(request, 'page.sources.placeholder.config_json'))}"></textarea>
-          <label><input type="checkbox" name="is_active" checked> {escape(_text(request, 'page.sources.active'))}</label>
-          <button>{escape(_text(request, "page.sources.create"))}</button>
-        </form>
-      </section>
+      {_render_source_form_section(request)}
       <section class="card">
         <h2>{escape(_text(request, "page.sources.registry"))}</h2>
-        <table>
-          <thead><tr><th>{escape(_text(request, 'page.sources.col.name'))}</th><th>{escape(_text(request, 'page.sources.col.type'))}</th><th>{escape(_text(request, 'page.sources.col.url'))}</th><th>{escape(_text(request, 'page.sources.col.cred'))}</th><th>{escape(_text(request, 'page.sources.col.status'))}</th><th>{escape(_text(request, 'page.sources.col.web_metadata'))}</th><th>{escape(_text(request, 'page.sources.col.actions'))}</th></tr></thead>
-          <tbody>{rows}</tbody>
-        </table>
+        <div class="table-scroll">
+          <table class="data-table source-table">
+            <colgroup>
+              <col style="width: 22%">
+              <col style="width: 22%">
+              <col style="width: 28%">
+              <col style="width: 20%">
+              <col style="width: 8%">
+            </colgroup>
+            <thead>
+              <tr>
+                <th>{escape(_text(request, 'page.sources.col.name'))}</th>
+                <th>{escape(_text(request, 'page.sources.col.url'))}</th>
+                <th>{escape(_text(request, 'page.sources.col.type'))} / {escape(_text(request, 'page.sources.col.cred'))} / {escape(_text(request, 'page.sources.col.status'))} / {escape(_text(request, 'page.sources.maintenance_status'))}</th>
+                <th>{escape(_text(request, 'page.sources.col.web_metadata'))}</th>
+                <th>{escape(_text(request, 'page.sources.col.actions'))}</th>
+              </tr>
+            </thead>
+            <tbody>{rows}</tbody>
+          </table>
+        </div>
       </section>
     </div>
     """
@@ -743,18 +1337,16 @@ async def documents_page(
     has_filters = bool(q.strip() or source_id.strip())
     empty_message = _text(request, "page.documents.empty.filtered") if has_filters else _text(request, "page.documents.empty.all")
     rows = "".join(
-        f"<tr>"
-        f"<td><a href='/web/documents/{escape(str(doc['id']))}'>{escape(str(doc['title']))}</a></td>"
-        f"<td>{escape(str(doc['source_name']))}</td>"
-        f"<td>{escape(str(doc['status']))}</td>"
-        f"<td>{escape(str(doc['language']))}</td>"
-        f"<td>{escape(_document_time_value(doc))}</td>"
-        f"<td>{escape(str(doc['summary_text']))}</td>"
-        f"<td>{_render_document_signal_chips(request, doc)}</td>"
-        f"<td><a href='/web/documents/{escape(str(doc['id']))}'>{escape(_text(request, 'page.documents.detail'))}</a></td>"
-        f"</tr>"
+        _render_document_card(
+            request,
+            doc,
+            section="page.documents",
+            include_language=True,
+            detail_href=f"/web/documents/{escape(str(doc['id']))}",
+            detail_label=_text(request, "page.documents.detail"),
+        )
         for doc in documents
-    ) or _empty_table_row(empty_message, colspan=8)
+    ) or f"<div class='card muted'>{escape(empty_message)}</div>"
     error_html = _render_database_note(request, error)
     filters_html = f"""
       <section class="card">
@@ -779,10 +1371,7 @@ async def documents_page(
     <div class="grid" style="margin-top:16px;">
       <section class="card">
         <h2>{escape(_text(request, "page.documents.list"))}</h2>
-        <table>
-          <thead><tr><th>{escape(_text(request, "page.documents.col.title"))}</th><th>{escape(_text(request, "page.documents.col.source"))}</th><th>{escape(_text(request, "page.documents.col.status"))}</th><th>{escape(_text(request, "page.documents.col.language"))}</th><th>{escape(_text(request, "page.documents.col.time"))}</th><th>{escape(_text(request, "page.documents.col.summary"))}</th><th>{escape(_text(request, "page.documents.col.signals"))}</th><th>{escape(_text(request, "page.documents.col.detail"))}</th></tr></thead>
-          <tbody>{rows}</tbody>
-        </table>
+        <div class="document-list">{rows}</div>
       </section>
     </div>
     """
@@ -1302,15 +1891,9 @@ async def ai_settings_page(request: Request, message: str | None = None) -> HTML
     providers = service.list_ai_providers()
     task_values = service.list_ai_task_values()
     list_action = _ai_settings_url(request, "/web/ai-settings")
-    rows = "".join(
-        f"<tr><td>{escape(provider.name)}</td><td>{escape(provider.provider_type)}</td><td>{escape(provider.base_url)}</td>"
-        f"<td>{escape(provider.model)}</td><td>{escape(provider.masked_key)}</td><td>{escape(str(provider.is_default))}</td>"
-        f"<td>{escape(str(provider.is_enabled))}</td><td>{escape(', '.join(provider.supported_tasks))}</td>"
-        f"<td>{escape(provider.last_test_status or '-')}</td>"
-        f"<td><a class='nav-link' href='{escape(_ai_settings_url(request, f'/web/ai-settings/{provider.id}'))}'>{escape(_text(request, 'page.ai_settings.action.edit'))}</a> "
-        f"<form class='inline' method='post' action='{escape(_ai_settings_url(request, f'/web/ai-settings/{provider.id}/test'))}'><button>{escape(_text(request, 'page.ai_settings.action.test'))}</button></form></td></tr>"
-        for provider in providers
-    ) or _empty_table_row(_text(request, "page.ai_settings.no_providers"), colspan=10)
+    rows = "".join(_render_ai_provider_row(request, provider) for provider in providers)
+    if not rows:
+        rows = _empty_table_row(_text(request, "page.ai_settings.no_providers"), colspan=6)
     task_inputs = "".join(
         f"<label><input type='checkbox' name='task_{escape(task)}' checked> {escape(task)}</label>"
         for task in task_values
@@ -1338,10 +1921,20 @@ async def ai_settings_page(request: Request, message: str | None = None) -> HTML
       </section>
       <section class="card">
         <h2>{escape(_text(request, "page.ai_settings.configured_providers"))}</h2>
-        <table>
-          <thead><tr><th>{escape(_text(request, "page.ai_settings.col.name"))}</th><th>{escape(_text(request, "page.ai_settings.col.type"))}</th><th>{escape(_text(request, "page.ai_settings.col.base_url"))}</th><th>{escape(_text(request, "page.ai_settings.col.model"))}</th><th>{escape(_text(request, "page.ai_settings.col.key"))}</th><th>{escape(_text(request, "page.ai_settings.col.default"))}</th><th>{escape(_text(request, "page.ai_settings.col.enabled"))}</th><th>{escape(_text(request, "page.ai_settings.col.tasks"))}</th><th>{escape(_text(request, "page.ai_settings.col.status"))}</th><th>{escape(_text(request, "page.ai_settings.col.actions"))}</th></tr></thead>
-          <tbody>{rows}</tbody>
-        </table>
+        <div class="table-scroll">
+          <table class="data-table provider-table">
+            <colgroup>
+              <col style="width: 18%;">
+              <col style="width: 30%;">
+              <col style="width: 16%;">
+              <col style="width: 14%;">
+              <col style="width: 14%;">
+              <col style="width: 18%;">
+            </colgroup>
+            <thead><tr><th>{escape(_text(request, "page.ai_settings.col.name"))}</th><th>{escape(_text(request, "page.ai_settings.col.base_url"))}</th><th>{escape(_text(request, "page.ai_settings.col.model"))}</th><th>{escape(_text(request, "page.ai_settings.col.key"))}</th><th>{escape(_text(request, "page.ai_settings.col.status"))}</th><th>{escape(_text(request, "page.ai_settings.col.actions"))}</th></tr></thead>
+            <tbody>{rows}</tbody>
+          </table>
+        </div>
       </section>
     </div>
     """
@@ -1412,56 +2005,54 @@ async def test_ai_provider(provider_id: str, request: Request) -> RedirectRespon
 @router.get("/web/system")
 async def system_page(request: Request, message: str | None = None) -> HTMLResponse:
     status = service.get_system_page_data()
-    checks_html = "".join(
-        f"<div><strong>{escape(item['label'])}:</strong> {escape(item['status'])}</div>"
-        f"<div class='muted'>{escape(item['detail'])}</div>"
-        for item in status["checks"]
-    ) or f"<div class='muted'>{escape(_text(request, 'page.system.no_checks'))}</div>"
-    file_rows = "".join(
-        f"<tr><td>{escape(item['path'])}</td><td>{escape(item['exists_label'])}</td><td>{item['size_bytes']}</td></tr>"
-        for item in status["storage_files"]
+    checks_html = "".join(_render_system_check_card(request, item) for item in status["checks"]) or (
+        f"<div class='system-check-card muted'>{escape(_text(request, 'page.system.no_checks'))}</div>"
     )
-    storage_overview_rows = "".join(
+    storage_overview_html = "".join(
+        _render_storage_overview_card(request, item) for item in status.get("storage_overview", [])
+    ) or f"<div class='system-storage-card muted'>{escape(_text(request, 'page.system.storage.empty'))}</div>"
+    count_cards = "".join(_render_database_count_card(request, item) for item in status["database_counts"]) or (
+        f"<article class='system-count-card'><div class='muted'>{escape(_text(request, 'shared.no_database_counts'))}</div><div class='system-count-value'>0</div></article>"
+    )
+    file_rows = "".join(
         f"<tr>"
-        f"<td>{escape(_system_storage_text(request, item.get('area_key')))}</td>"
-        f"<td>{escape(_system_storage_text(request, item.get('primary_key')))}</td>"
-        f"<td>{escape(_system_storage_text(request, item.get('fallback_key')))}</td>"
-        f"<td>{escape(_system_storage_text(request, item.get('detail_key')))}</td>"
-        f"<td>{escape(str(item.get('path') or '-'))}</td>"
+        f"<td class='path-cell'><span class='truncate mono' title='{escape(str(item.get('path') or '-'))}'>{escape(str(item.get('path') or '-'))}</span></td>"
+        f"<td class='exists-cell'>{_render_file_exists_badge(request, item.get('exists_label'))}</td>"
+        f"<td class='size-cell'>{escape(_format_file_size(item.get('size_bytes')))}</td>"
         f"</tr>"
-        for item in status.get("storage_overview", [])
-    ) or f"<tr><td colspan='5'>{escape(_text(request, 'page.system.storage.empty'))}</td></tr>"
-    count_rows = "".join(
-        f"<tr><td>{escape(item['name'])}</td><td>{item['count']}</td></tr>" for item in status["database_counts"]
-    ) or f"<tr><td colspan='2'>{escape(_text(request, 'shared.no_database_counts'))}</td></tr>"
-    file_rows = file_rows or f"<tr><td colspan='3'>{escape(_text(request, 'shared.no_storage_files'))}</td></tr>"
+        for item in status["storage_files"]
+    ) or f"<tr><td colspan='3'>{escape(_text(request, 'shared.no_storage_files'))}</td></tr>"
     note_html = _render_database_note(request, status.get("counts_error"))
     body = f"""
     {note_html}
-    <div class="grid cols-2">
-      <section class="card">
+    <div class="system-top-grid">
+      <section class="card system-section">
         <h2>{escape(_text(request, "page.system.storage_overview"))}</h2>
         <div class="muted">{escape(_text(request, "page.system.storage.group.main_knowledge"))} / {escape(_text(request, "page.system.storage.group.web_config"))}</div>
-        <table>
-          <thead><tr><th>{escape(_text(request, "page.system.col.area"))}</th><th>{escape(_text(request, "page.system.col.primary"))}</th><th>{escape(_text(request, "page.system.col.fallback"))}</th><th>{escape(_text(request, "page.system.col.detail"))}</th><th>{escape(_text(request, "page.system.col.path"))}</th></tr></thead>
-          <tbody>{storage_overview_rows}</tbody>
-        </table>
+        <div class="system-card-stack">{storage_overview_html}</div>
       </section>
-      <section class="card stack">
+      <section class="card system-section">
         <h2>{escape(_text(request, "page.system.checks"))}</h2>
-        {checks_html}
+        <div class="system-card-stack">{checks_html}</div>
       </section>
-      <section class="card">
+      <section class="card system-section">
         <h2>{escape(_text(request, "page.system.database_counts"))}</h2>
-        <table><tbody>{count_rows}</tbody></table>
+        <div class="system-count-grid">{count_cards}</div>
       </section>
-      <section class="card">
-        <h2>{escape(_text(request, "page.system.storage_files"))}</h2>
-        <table>
+    </div>
+    <section class="card" style="margin-top:16px;">
+      <h2>{escape(_text(request, "page.system.storage_files"))}</h2>
+      <div class="table-scroll">
+        <table class="data-table system-files-table">
+          <colgroup>
+            <col style="width: 72%;">
+            <col style="width: 14%;">
+            <col style="width: 14%;">
+          </colgroup>
           <thead><tr><th>{escape(_text(request, "page.system.col.path"))}</th><th>{escape(_text(request, "page.system.col.exists"))}</th><th>{escape(_text(request, "page.system.col.size_bytes"))}</th></tr></thead>
           <tbody>{file_rows}</tbody>
         </table>
-      </section>
-    </div>
+      </div>
+    </section>
     """
     return _layout(request, _text(request, "page.system.title"), body, message=message)

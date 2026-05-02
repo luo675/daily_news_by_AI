@@ -305,15 +305,27 @@ def test_dashboard_page_renders_recent_summary_and_system_status(monkeypatch, wo
             "recent_documents": [
                 {
                     "id": str(uuid.uuid4()),
-                    "title": "Weekly AI coding tools update",
+                    "title": "What OpenAI did",
                     "source_name": "Example Source",
                     "created_at": "2026-04-28 09:30:00+00:00",
                     "published_at": "2026-04-27 12:00:00+00:00",
                     "status": "processed",
-                    "summary_text": "Manual effective summary for AI coding tools.",
+                    "summary_text": "Manual effective summary for AI coding tools and product updates.",
                     "opportunity_count": 2,
                     "risk_count": 0,
                     "uncertainty_count": 1,
+                },
+                {
+                    "id": str(uuid.uuid4()),
+                    "title": "Announcing our updated Responsible Scaling Policy",
+                    "source_name": "OpenAI Blog",
+                    "created_at": "2026-04-29 09:30:00+00:00",
+                    "published_at": "2026-04-29 08:00:00+00:00",
+                    "status": "processed",
+                    "summary_text": "This longer English summary should wrap naturally in the card layout without being compressed.",
+                    "opportunity_count": 1,
+                    "risk_count": 1,
+                    "uncertainty_count": 0,
                 }
             ],
             "top_topics": [("AI Coding", 5)],
@@ -338,13 +350,18 @@ def test_dashboard_page_renders_recent_summary_and_system_status(monkeypatch, wo
     assert "数据库:</strong> available" in response.text
     assert "服务商:</strong> 1 provider enabled" in response.text
     assert "知识:</strong> 1 recent document available in the dashboard" in response.text
-    assert "Manual effective summary for AI coding tools." in response.text
+    assert "Manual effective summary for AI coding tools and product updates." in response.text
     assert "processed" in response.text
     assert "2026-04-27 12:00:00+00:00" in response.text
     assert "\u5feb\u901f\u5165\u53e3" in response.text
     assert "/web/documents" in response.text
     assert "/web/ask" in response.text
     assert "/web/review" in response.text
+    assert "document-card" in response.text
+    assert "<table" not in response.text
+    assert "What OpenAI did" in response.text
+    assert "Announcing our updated Responsible Scaling Policy" in response.text
+    assert "Manual effective summary for AI coding tools and product updates." in response.text
     assert "\u673a\u4f1a: 2" in response.text
     assert "\u98ce\u9669: 0" in response.text
     assert "\u4e0d\u786e\u5b9a\u6027: 1" in response.text
@@ -403,6 +420,8 @@ def test_dashboard_page_renders_english_shell_when_lang_query_requests_en(monkey
     assert "\u539f\u59cb\u4e2d\u6587\u6458\u8981\u4e0d\u7ffb\u8bd1" in response.text
     assert "Top Topics" in response.text
     assert "AI Providers" in response.text
+    assert "document-card" in response.text
+    assert "<table" not in response.text
     assert "控制台" not in response.text
 
 
@@ -450,7 +469,7 @@ def test_documents_page_uses_document_view_contract(monkeypatch, workspace_tmp_p
             [
                 {
                     "id": str(uuid.uuid4()),
-                    "title": "Weekly AI coding tools update",
+                    "title": "What OpenAI did",
                     "source_name": "Example Source",
                     "language": "en",
                     "status": "processed",
@@ -461,6 +480,20 @@ def test_documents_page_uses_document_view_contract(monkeypatch, workspace_tmp_p
                     "opportunity_count": 2,
                     "risk_count": 1,
                     "uncertainty_count": 1,
+                },
+                {
+                    "id": str(uuid.uuid4()),
+                    "title": "Announcing our updated Responsible Scaling Policy",
+                    "source_name": "OpenAI Blog",
+                    "language": "en",
+                    "status": "processed",
+                    "published_at": "2026-04-29 08:00:00+00:00",
+                    "summary_text": "This longer English summary should wrap naturally in the card layout without being compressed.",
+                    "key_points": [],
+                    "created_at": "2026-04-29 09:00:00+00:00",
+                    "opportunity_count": 1,
+                    "risk_count": 0,
+                    "uncertainty_count": 2,
                 }
             ],
             None,
@@ -483,7 +516,10 @@ def test_documents_page_uses_document_view_contract(monkeypatch, workspace_tmp_p
 
     assert response.status_code == 200
     assert "Manual effective summary for AI coding tools." in response.text
-    assert "Weekly AI coding tools update" in response.text
+    assert "What OpenAI did" in response.text
+    assert "Announcing our updated Responsible Scaling Policy" in response.text
+    assert "document-card" in response.text
+    assert "<table" not in response.text
     assert "value=\"ai tools\"" in response.text
     assert f"value='{source_id}' selected" in response.text
     assert "当前筛选条件" in response.text
@@ -550,6 +586,8 @@ def test_documents_page_renders_english_shell_without_translating_knowledge(
     assert "Uncertainties" in response.text
     assert "Details" in response.text
     assert "Published / Created" in response.text
+    assert "document-card" in response.text
+    assert "<table" not in response.text
     assert "\u4e2d\u6587\u6807\u9898" in response.text
     assert "\u8fd9\u662f\u539f\u59cb\u4e2d\u6587\u6458\u8981\uff0c\u4e0d\u5e94\u88ab\u7ffb\u8bd1\u3002" in response.text
     assert f"/web/documents/{document_id}" in response.text
@@ -621,7 +659,8 @@ def test_documents_page_renders_stable_missing_field_fallbacks(monkeypatch, work
 
     assert response.status_code == 200
     assert "Untitled document" in response.text
-    assert "<td>-</td>" in response.text
+    assert "document-card" in response.text
+    assert "<table" not in response.text
 
 
 def test_documents_page_renders_empty_state_without_filters(monkeypatch, workspace_tmp_path: Path) -> None:
@@ -841,7 +880,7 @@ def test_sources_page_uses_source_page_view_contract(monkeypatch, workspace_tmp_
                     "id": source_id,
                     "name": "Example Source",
                     "source_type": "manual_import",
-                    "url": "https://example.com/source",
+                    "url": "https://example.com/source/with/a/very/long/path/that/should/be/truncated/in/the/table/view",
                     "credibility_level": "B",
                     "fetch_strategy": "manual",
                     "is_active": True,
@@ -886,11 +925,23 @@ def test_sources_page_uses_source_page_view_contract(monkeypatch, workspace_tmp_
     assert response.status_code == 200
     assert "来源目录" in response.text
     assert "Example Source" in response.text
+    assert "table-scroll" in response.text
+    assert "source-table" in response.text
+    assert "source-badge-list" in response.text
+    assert "badge-info" in response.text
+    assert "badge-success" in response.text
+    assert "badge-danger" in response.text
+    assert "source-maintenance-summary" in response.text
+    assert "truncate mono" in response.text
+    assert "action-button" in response.text
+    assert "source-config-details" in response.text
+    assert "config_json" in response.text
     assert "manual_import" in response.text
     assert "enabled" in response.text
     assert "disabled" in response.text
     assert "Stable manual source." in response.text
     assert "News desk" in response.text
+    assert "https://example.com/source/with/a/very/long/path/that/should/be/truncated/in/the/table/view" in response.text
     assert "用户输入来源" in response.text
     assert ">-<" in response.text
     assert "ordinary" in response.text
@@ -909,7 +960,7 @@ def test_sources_page_renders_english_shell_when_lang_query_requests_en(monkeypa
                     "id": source_id,
                     "name": "Example Source",
                     "source_type": "manual_import",
-                    "url": "https://example.com/source",
+                    "url": "https://example.com/source/with/a/very/long/path/that/should/be/truncated/in/the/table/view",
                     "credibility_level": "B",
                     "fetch_strategy": "manual",
                     "is_active": True,
@@ -935,6 +986,8 @@ def test_sources_page_renders_english_shell_when_lang_query_requests_en(monkeypa
     assert "Source Registry" in response.text
     assert "Add Source" in response.text
     assert "Create Source" in response.text
+    assert "Basic information" in response.text
+    assert "Advanced configuration" in response.text
     assert "Type" in response.text
     assert "Credibility" in response.text
     assert "Notes" in response.text
@@ -1120,7 +1173,7 @@ def test_system_page_uses_system_page_data_contract(monkeypatch, workspace_tmp_p
             "counts_error": None,
             "storage_files": [
                 {"path": "configs/web/ai_settings.json", "exists_label": "yes", "size_bytes": 128},
-                {"path": "configs/web/qa_history.json", "exists_label": "no", "size_bytes": 0},
+                {"path": "configs/web/qa_history.json", "exists_label": "no", "size_bytes": 1536},
             ],
             "storage_overview": [
                 {
@@ -1169,6 +1222,15 @@ def test_system_page_uses_system_page_data_contract(monkeypatch, workspace_tmp_p
     assert "存储文件" in response.text
     assert "数据库计数" in response.text
     assert "Database environment" in response.text
+    assert "system-top-grid" in response.text
+    assert "system-check-card" in response.text
+    assert "system-count-card" in response.text
+    assert "badge-success" in response.text
+    assert "badge-danger" in response.text
+    assert "128 B" in response.text
+    assert "1.5 KB" in response.text
+    assert "system-files-table" in response.text
+    assert "table-scroll" in response.text
     assert "available" in response.text
     assert "configs/web/ai_settings.json" in response.text
     assert "yes" in response.text
@@ -1227,6 +1289,9 @@ def test_system_page_renders_english_storage_shell(monkeypatch, workspace_tmp_pa
     assert response.status_code == 200
     assert "System / Storage" in response.text
     assert "Storage Overview" in response.text
+    assert "system-top-grid" in response.text
+    assert "system-check-card" in response.text
+    assert "system-count-card" in response.text
     assert "Main knowledge storage" in response.text
     assert "Web configuration storage" in response.text
     assert "Ask history" in response.text
@@ -1234,6 +1299,8 @@ def test_system_page_renders_english_storage_shell(monkeypatch, workspace_tmp_pa
     assert "DB-first" in response.text
     assert "JSON fallback" in response.text
     assert "PostgreSQL + pgvector" in response.text
+    assert "table-scroll" in response.text
+    assert "system-files-table" in response.text
     assert "api_key" not in response.text
 
 
@@ -1269,6 +1336,8 @@ def test_system_page_renders_empty_and_degraded_states(monkeypatch, workspace_tm
     assert "数据库提示:" in response.text
     assert "部分页面数据暂不可用。" in response.text
     assert "Database session unavailable." in response.text
+    assert "badge-warning" in response.text
+    assert "system-count-card" in response.text
     assert "DB-first" in response.text
     assert "JSON fallback" in response.text
     assert "暂无数据库计数。" in response.text
@@ -1300,3 +1369,5 @@ def test_system_page_renders_real_counts_query_error(monkeypatch, workspace_tmp_
     assert "数据库提示:" in response.text
     assert "部分页面数据暂不可用。" in response.text
     assert "RuntimeError: count query timeout" in response.text
+    assert "badge-success" in response.text
+    assert "system-count-card" in response.text
