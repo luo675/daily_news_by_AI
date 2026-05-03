@@ -15,6 +15,7 @@
 项目已经不是纯设计阶段，当前已有一条可运行的 MVP 主链：
 
 - 最小 URL 导入与批处理入口已打通
+- Web 手动导入入口已打通，可在 `/web/import` 粘贴文本或上传 `.md/.markdown/.txt`
 - PostgreSQL + pgvector 路径已验证过
 - Web MVP 已落地
 - Review 已扩展到：
@@ -65,6 +66,7 @@
   - Sources
   - Documents / Knowledge
   - Review
+  - Import
   - Watchlist
   - Ask / Q&A
   - AI Settings
@@ -167,6 +169,23 @@ pytest tests -q
 .\.venv\Scripts\python.exe scripts\run_application_batch.py --url-list scripts\real_seed_sources --no-persist
 ```
 
+### Web 手动导入
+
+启动 Web 后打开：
+
+```text
+http://127.0.0.1:8000/web/import
+```
+
+当前支持：
+
+- 直接粘贴文本或 Markdown
+- 上传单个 `.md` / `.markdown` / `.txt` 文件
+- 提交后立即复用现有 application pipeline 和 persistence 入库
+- 成功后跳转到 `/web/documents/{document_id}`
+
+当前不支持 PDF、Word、多文件上传、文件归档管理或通用爬虫能力。
+
 ## Web MVP 说明
 
 当前 Web MVP 的定位是：
@@ -188,6 +207,7 @@ pytest tests -q
 - 本地 evidence 优先
 - reviewed 结果优先于自动结果
 - 外部 AI 只能消费“问题 + 已选本地证据”
+- 外部 `chat/completions` 超时当前为 60 秒；超时后仍回退到本地回答
 
 ## 当前重要实现约束
 
@@ -199,6 +219,7 @@ pytest tests -q
 - `src/processing/*`
 - 已稳定的 CLI / API 主路径
 - 当前 `url_importer` 的“最薄 HTML 导入器”定位
+- 当前 `/web/import` 的“最小手动喂数入口”定位
 - Ask 的 `local retrieval first` 主边界
 
 不要擅自扩展为：
@@ -207,6 +228,7 @@ pytest tests -q
 - 通用爬虫系统
 - advanced RAG
 - 主知识存储重构
+- 文件管理系统或多格式文档解析平台
 
 ## 当前优先级
 
@@ -306,6 +328,37 @@ What this means in practice:
 - Review current-filter label and type-specific empty states are complete
 - the next Web task should not reopen Review filter design or review storage semantics
 - the project should move on to the next small page-quality or workflow-efficiency task on top of the stable baseline
+
+For the latest handoff status and the most reasonable next-session starting point, always prefer [ARCH_CONTEXT.md](./ARCH_CONTEXT.md).
+
+## Latest Status Update (2026-05-03 Manual Import / Ask Timeout / Review Density)
+
+This section supplements the user-trial feedback fixes above.
+
+- `/web/import` has been added to the main Web navigation.
+- The Import page supports pasted text and single-file `.md`, `.markdown`, and `.txt` uploads.
+- Manual imports are converted into `RawDocumentInput` with `manual_import` source type and reuse the existing application pipeline and persistence.
+- Successful manual imports redirect to the new document detail page.
+- The Import page contract is documented in [docs/web_page_contract.md](./docs/web_page_contract.md).
+- Ask external provider `chat/completions` timeout was increased from 25 seconds to 60 seconds after a real `siliconCloude` timeout investigation.
+- Ask remains `local retrieval first`; external failures still fall back to local answers and preserve error metadata.
+- Review edit history is now collapsed by default using page-layer `<details>` sections to reduce long-scroll friction.
+- Focused verification for the Import route and Web MVP acceptance was:
+  - `pytest tests/test_web_import.py tests/test_web_mvp_acceptance.py -q`
+  - `18 passed`
+
+What this means in practice:
+
+- Users can now feed local articles from the Web UI without using the terminal batch importer.
+- This is still a manual-feeding MVP, not a crawler, file manager, or broad document-ingestion platform.
+- The next step should be real user trial of `/web/import` with pasted long-form content and Markdown files.
+
+Do not reopen by default:
+
+- Ask timeout root-cause investigation
+- Review history collapse as a workflow redesign
+- `/web/import` as a PDF/Word/multi-file upload feature
+- crawler/source-discovery/advanced-RAG work
 
 For the latest handoff status and the most reasonable next-session starting point, always prefer [ARCH_CONTEXT.md](./ARCH_CONTEXT.md).
 

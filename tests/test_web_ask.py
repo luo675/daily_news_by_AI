@@ -1183,8 +1183,9 @@ def test_ask_question_includes_document_context_for_long_local_articles(
         def read(self):
             return b'{"choices": [{"message": {"content": "External answer using local context."}}]}'
 
-    def _capture_request(req, timeout=25):
+    def _capture_request(req, timeout=60):
         captured_request["body"] = req.data
+        captured_request["timeout"] = timeout
         return _FakeResponse()
 
     class _FakeDatabaseReviewService:
@@ -1210,8 +1211,38 @@ def test_ask_question_includes_document_context_for_long_local_articles(
 
     payload = json.loads(captured_request["body"].decode("utf-8"))
     user_message = payload["messages"][1]["content"]
+    assert captured_request["timeout"] == 60
     assert "The main idea is that Something Big Is Happening needs local document context" in user_message
     assert "Context:" in user_message
+
+
+def test_ask_question_falls_back_and_preserves_timeout_error_when_provider_times_out(
+    monkeypatch,
+    workspace_tmp_path: Path,
+) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    service = WebMvpService()
+    provider = _build_provider()
+    document = _build_document(key_points=["AI coding tools changed this week with better review workflows."])
+    captured_request: dict[str, object] = {}
+
+    monkeypatch.setattr(service, "list_ai_providers", lambda: [provider])
+    monkeypatch.setattr(service, "search_documents_for_question", lambda question: ([document], None))
+    monkeypatch.setattr(service, "search_briefs_for_question", lambda question: ([], None), raising=False)
+
+    def _timeout_request(req, timeout=60):
+        captured_request["timeout"] = timeout
+        raise TimeoutError("The read operation timed out")
+
+    monkeypatch.setattr(web_service_module.request, "urlopen", _timeout_request)
+
+    result = service.ask_question("What changed in AI coding tools this week?")
+
+    assert captured_request["timeout"] == 60
+    assert result["answer_mode"] == "local_fallback"
+    assert result["provider_name"] == provider.name
+    assert result["error"] == "TimeoutError: The read operation timed out"
+    assert "Evidence note: A focused local summary/key-point match was found." in result["answer"]
 
 
 def test_ask_question_adds_reviewed_brief_risk_and_uncertainty_evidence(

@@ -1812,3 +1812,66 @@ Recommended next order:
 5. Capture any new issue with page, reproduction steps, expected result, actual result, and severity.
 
 Do not start source discovery, crawler expansion, advanced RAG, production secrets management, or broad schema changes before the next round of real user feedback.
+
+## 20. Latest Progress Addendum (2026-05-03 Manual Web import, Ask timeout, and Review density)
+
+This addendum records the latest user-trial-driven improvements after the first local walkthrough feedback. It overrides older notes that still describe manual content import as terminal-only or Review history as always expanded.
+
+### Completed in this round
+
+- Ask external provider timeout handling was reviewed after a real `siliconCloude` failure.
+  - The provider configuration itself was valid: `/models` test passed and the provider had successful historical calls.
+  - The failure pattern was `TimeoutError: The read operation timed out` on `chat/completions`.
+  - Ask `chat/completions` timeout was increased from 25 seconds to 60 seconds.
+  - Existing `local retrieval first` and `local_fallback` behavior remains unchanged.
+  - External provider failures still preserve the error string in Ask history/result metadata.
+- Review page density was lightly improved.
+  - Review edit history is now rendered in collapsed `<details>` sections.
+  - This reduces long-scroll friction without changing review override semantics, storage shape, save behavior, or type filtering.
+- A new manual Web import entrypoint was added.
+  - `/web/import` is now in the main Web navigation.
+  - The page supports pasted text and single-file uploads for `.md`, `.markdown`, and `.txt`.
+  - Valid submissions are wrapped as `RawDocumentInput` with `SourceType.MANUAL_IMPORT`.
+  - Manual imports reuse the existing application pipeline and persistence path.
+  - Successful imports redirect to `/web/documents/{document_id}`.
+  - Empty content, unsupported extension, oversize content, and pipeline failures return to the import page with a readable error.
+  - `docs/web_page_contract.md` now includes the Import page contract.
+
+### Verification
+
+- Import-focused verification was run with:
+  - `pytest tests/test_web_import.py tests/test_web_mvp_acceptance.py -q`
+  - result: `18 passed`
+- The implementation report also recorded:
+  - `pytest tests/test_web_import.py -q` with `5 passed`
+  - `pytest tests/test_web_mvp_acceptance.py -q` with `13 passed`
+  - `pytest tests/test_web_dashboard_documents.py -q` with `34 passed`
+  - `python -m compileall src tests`
+
+### Important boundary that remains
+
+- `/web/import` is a page-layer manual-feeding entrypoint, not a new ingestion architecture.
+- Do not expand it by default into:
+  - PDF / Word parsing
+  - multi-file upload
+  - file management
+  - source discovery
+  - crawler behavior
+  - Playwright / JS-rendered scraping
+- Manual import currently stores through the normal database/pipeline path; it is not a separate file-archive system.
+- Ask timeout was increased only for external `chat/completions`; AI Settings `/models` test behavior is separate.
+- Review history collapse is display-only and must not be treated as a review workflow redesign.
+- Continue avoiding changes to `src/domain/*`, `src/application/persistence.py`, and `src/processing/*` unless a concrete regression requires it.
+
+### Updated next-session starting point
+
+The next session should continue user-trial validation on top of the new manual import path:
+
+1. Start the Web app and open `/web/import`.
+2. Import one pasted long article and one `.md` file.
+3. Confirm both appear in Documents and open in Document Detail.
+4. Check Review for generated summary/opportunity/risk/uncertainty items.
+5. Ask questions that include the imported article title and confirm local evidence is returned.
+6. If external AI is configured, observe whether the 60-second timeout reduces fallback frequency.
+
+Do not start crawler expansion, advanced RAG, production secrets management, file-archive design, or broad schema changes before this new import flow has been exercised with real user data.

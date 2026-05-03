@@ -1,6 +1,6 @@
 # Web MVP Trial Report
 
-Date: 2026-05-02
+Date: 2026-05-03
 
 ## Scope
 
@@ -28,6 +28,7 @@ Seed list file:
 1. Created 3 watchlist items.
 1. Saved 1 manual review edit.
 1. Submitted 2 Ask questions and checked the returned evidence.
+1. Re-ran the import path with one pasted text and one Markdown file for the follow-up import trial.
 
 ## Results
 
@@ -95,6 +96,28 @@ Verification:
 - Both answers showed `Evidence: 3 items`.
 - Both answers were generated without requiring a real external provider as an acceptance prerequisite.
 
+### Import Follow-up
+
+Imported payloads:
+
+- Pasted text: `ImportSmokeToken AlphaBeta`
+- Markdown file: `ImportSmokeToken GammaDelta`
+
+Verification:
+
+- Both `POST /web/import` submissions returned `303` redirects to new document detail pages.
+- Both imported document IDs were new and distinct.
+- Both imported documents were queryable through the existing Ask path.
+- The pasted-text ask returned evidence for `ImportSmokeToken AlphaBeta`.
+- The Markdown-file ask returned evidence for `ImportSmokeToken GammaDelta`.
+- The imported content remained visible in the document detail route.
+
+Browser-engine note:
+
+- I attempted a real browser DOM pass with local Edge headless against `/web/import`, `/web/documents/{id}`, `/web/review`, and `/web/ask`.
+- On this machine, Edge headless did not yield a usable DOM dump for those pages and emitted crashpad/profile errors instead.
+- So the follow-up trial is verified at the HTTP/application level, but a full browser DOM inspection is still blocked by the local Edge environment.
+
 ## Passed Items
 
 - Real batch import with 5 URLs
@@ -104,10 +127,11 @@ Verification:
 - 3 Watchlist items created and visible as cards
 - 1 Review edit saved and visible in history
 - 2 Ask questions returned local evidence
+- 2 manual import submissions created new documents and were Ask-reachable
 
 ## Failed Items
 
-- None in this trial run
+- Edge headless DOM inspection was not usable on this machine because of local crashpad/profile errors.
 
 ## Blockers / Notes
 

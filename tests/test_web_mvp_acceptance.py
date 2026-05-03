@@ -255,6 +255,7 @@ def test_web_mvp_route_level_read_smoke(monkeypatch) -> None:
     assert dashboard_response.status_code == 200
     assert "系统状态" in dashboard_response.text
     assert "Weekly AI coding tools update" in dashboard_response.text
+    assert "/web/import" in dashboard_response.text
 
     assert documents_response.status_code == 200
     assert "文档列表" in documents_response.text
@@ -507,3 +508,31 @@ def test_web_watchlist_renders_shared_database_note_when_db_unavailable(monkeypa
     assert "Database note" in response.text
     assert "Some page data is unavailable." in response.text
     assert "No watchlist items yet." in response.text
+
+
+def test_web_mvp_review_history_is_collapsed_by_default(monkeypatch) -> None:
+    review_item = _review_summary_item()
+    review_item.history = [
+        type(
+            "ReviewEditRow",
+            (),
+            {
+                "field_name": "summary_en",
+                "new_value": "Manual summary",
+                "created_at": datetime(2026, 4, 29, 8, 0, tzinfo=timezone.utc),
+            },
+        )()
+    ]
+
+    monkeypatch.setattr(web_routes.service, "list_review_uncertainties", lambda: ([], None))
+    monkeypatch.setattr(web_routes.service, "list_review_risks", lambda: ([], None))
+    monkeypatch.setattr(web_routes.service, "list_review_opportunities", lambda: ([], None))
+    monkeypatch.setattr(web_routes.service, "list_review_documents", lambda: ([review_item], None))
+
+    client = TestClient(create_app())
+    response = client.get("/web/review")
+
+    assert response.status_code == 200
+    assert "review-history" in response.text
+    assert "summary_en -> Manual summary" in response.text
+    assert "<details" in response.text

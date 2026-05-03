@@ -7,6 +7,8 @@ This note records the current page-layer contract for the server-rendered Web MV
 - `GET /web/dashboard`
 - `GET /web/documents`
 - `GET /web/documents/{document_id}`
+- `GET /web/import`
+- `POST /web/import`
 - `GET /web/sources`
 - `GET /web/sources/{source_id}`
 - `GET /web/watchlist`
@@ -218,6 +220,30 @@ Downgrade rules:
 - missing content -> empty `content_preview`, rendered as `-`
 - DB degradation note uses the shared database-note wording when detail data is partially unavailable
 - document not found -> stable not-found card, not an exception trace
+
+## Import Page Contract
+
+`GET /web/import` renders a simple manual import form with:
+
+- optional `title`
+- pasted `content_text`
+- single-file upload `content_file`
+- accepted file extensions: `.md`, `.markdown`, `.txt`
+- upload size cap: 1.5 MB
+
+`POST /web/import` behavior:
+
+- blank content -> render the import page again with a clear error
+- unsupported extension -> render the import page again with a clear error
+- oversize content -> render the import page again with a clear error
+- valid submission -> reuse the existing application pipeline and persistence, then redirect to `/web/documents/{document_id}`
+
+Manual import is a page-layer feature only:
+
+- no new pipeline path
+- no domain model change
+- no new storage backend
+- no PDF/Word parsing
 
 ## Sources Contract
 

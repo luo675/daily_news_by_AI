@@ -40,7 +40,9 @@ from src.domain.models import (
     Topic,
     WatchlistItem,
 )
+from src.ingestion.schemas import DocumentMetadata, RawDocumentInput
 from src.ingestion.url_importer import import_url_as_raw_document
+from src.ingestion.validators import validate_raw_document
 from src.web.provider_store import AiProviderConfigRecord
 from src.web.qa_history_store import AskHistoryRecord
 
@@ -365,6 +367,47 @@ class WebMvpService:
             except Exception:
                 session.rollback()
             return f"Source import failed: {type(exc).__name__}: {exc}"
+        finally:
+            session.close()
+
+    def import_manual_document(
+        self,
+        *,
+        title: str,
+        content_text: str,
+        filename: str | None = None,
+        content_type: str | None = None,
+    ) -> tuple[str | None, str | None]:
+        try:
+            session = self._require_session()
+        except Exception as exc:
+            return None, f"Manual import failed: {type(exc).__name__}: {exc}"
+
+        try:
+            manual_format = self._guess_manual_import_format(filename=filename, content_type=content_type)
+            raw_document = RawDocumentInput(
+                title=title.strip() or "Manual import",
+                source_type=SourceType.MANUAL_IMPORT,
+                content_text=content_text,
+                fetched_at=datetime.now(timezone.utc),
+                source_name="Web manual import",
+                metadata=DocumentMetadata(
+                    original_format=manual_format,
+                    extra={"filename": filename} if filename else None,
+                ),
+            )
+            raw_document = validate_raw_document(raw_document)
+            result = self._orchestrator.run_document_pipeline(
+                document=raw_document,
+                persist=True,
+                include_daily_brief=False,
+                session=session,
+            )
+            session.commit()
+            return str(result.document_id), None
+        except Exception as exc:
+            session.rollback()
+            return None, f"Manual import failed: {type(exc).__name__}: {exc}"
         finally:
             session.close()
 
@@ -1671,7 +1714,7 @@ class WebMvpService:
             },
             method="POST",
         )
-        with request.urlopen(req, timeout=25) as response:
+        with request.urlopen(req, timeout=60) as response:
             payload = json.loads(response.read().decode("utf-8"))
         return payload["choices"][0]["message"]["content"].strip()
 
@@ -2967,3 +3010,14 @@ class WebMvpService:
             return session_factory()
         except Exception:
             return None
+
+    def _guess_manual_import_format(self, *, filename: str | None, content_type: str | None) -> str:
+        suffix = Path(filename or "").suffix.lower()
+        if suffix in {".md", ".markdown"}:
+            return "markdown"
+        if suffix == ".txt":
+            return "text"
+        lowered = (content_type or "").lower()
+        if "markdown" in lowered:
+            return "markdown"
+        return "text"

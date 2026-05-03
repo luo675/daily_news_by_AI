@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from email.parser import BytesParser
+from email.policy import default
 from html import escape
+from pathlib import Path
 from urllib.parse import parse_qs, parse_qsl, urlencode, urlsplit, urlunsplit
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from src.web.i18n import WebI18nContext
 from src.web.service import WebMvpService
@@ -21,6 +24,10 @@ def _i18n(request: Request) -> WebI18nContext:
 
 def _text(request: Request, key: str, default: str | None = None) -> str:
     return _i18n(request).text(key, default)
+
+
+def _import_text(request: Request, zh: str, en: str) -> str:
+    return zh if _i18n(request).lang == "zh" else en
 
 
 def _dashboard_redirect_url(request: Request) -> str:
@@ -88,6 +95,66 @@ async def _read_form(request: Request) -> dict[str, str]:
     body = await request.body()
     parsed = parse_qs(body.decode("utf-8"), keep_blank_values=True)
     return {key: values[-1] if values else "" for key, values in parsed.items()}
+
+
+def _import_allowed_suffix(filename: str) -> str:
+    return Path(filename).suffix.lower()
+
+
+def _derive_import_title(*, explicit_title: str, filename: str | None, content_text: str) -> str:
+    title = explicit_title.strip()
+    if title:
+        return title[:1024]
+
+    if filename:
+        stem = Path(filename).stem.strip()
+        if stem:
+            return stem[:1024]
+
+    for line in content_text.splitlines():
+        candidate = line.strip().lstrip("#").strip()
+        if candidate:
+            return candidate[:1024]
+
+    return "Manual import"
+
+
+async def _read_import_submission(request: Request) -> dict[str, str]:
+    content_type = request.headers.get("content-type", "")
+    body = await request.body()
+    if "multipart/form-data" not in content_type:
+        parsed = parse_qs(body.decode("utf-8"), keep_blank_values=True)
+        form = {key: values[-1] if values else "" for key, values in parsed.items()}
+        return {
+            "title": form.get("title", ""),
+            "content_text": form.get("content_text", ""),
+            "filename": "",
+            "content_type": "",
+        }
+
+    message = BytesParser(policy=default).parsebytes(
+        (
+            f"Content-Type: {content_type}\r\n"
+            "MIME-Version: 1.0\r\n"
+            "\r\n"
+        ).encode("utf-8")
+        + body
+    )
+    form: dict[str, str] = {"title": "", "content_text": "", "filename": "", "content_type": ""}
+    for part in message.iter_parts():
+        name = part.get_param("name", header="content-disposition") or ""
+        if not name:
+            continue
+        filename = part.get_filename() or ""
+        payload = part.get_payload(decode=True) or b""
+        if filename:
+            form["filename"] = filename
+            form["content_type"] = part.get_content_type()
+            form["content_text"] = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+            continue
+        value = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+        form[name] = value
+    return form
 
 
 def _bool_label(value: bool) -> str:
@@ -177,6 +244,38 @@ def _render_structured_list(items: object, *, empty_message: str) -> str:
             continue
         rendered.append(f"<li>{escape(str(item))}</li>")
     return f"<ul>{''.join(rendered)}</ul>"
+
+
+def _render_review_history_details(request: Request, history: list[object]) -> str:
+    history_items = _coerce_items(history)
+    title = _text(request, "page.review.history")
+    body: str
+    if not history_items:
+        body = f"<div class='muted'>{escape(_text(request, 'page.review.no_history_item'))}</div>"
+    else:
+        entries = []
+        for edit in history_items:
+            if isinstance(edit, dict):
+                field_name = str(edit.get("field_name") or "")
+                new_value = str(edit.get("new_value") or "")
+                created_at = str(edit.get("created_at") or "")
+            else:
+                field_name = str(getattr(edit, "field_name", "") or "")
+                new_value = str(getattr(edit, "new_value", "") or "")
+                created_at = str(getattr(edit, "created_at", "") or "")
+            entries.append(
+                "<li>"
+                f"{escape(field_name)} -> {escape(new_value)} "
+                f"<span class='muted'>{escape(created_at)}</span>"
+                "</li>"
+            )
+        body = f"<ul class='review-history-list'>{''.join(entries)}</ul>"
+    return (
+        "<details class='review-history'>"
+        f"<summary>{escape(title)} ({len(history_items)})</summary>"
+        f"{body}"
+        "</details>"
+    )
 
 
 def _render_meta_section(request: Request, meta: object) -> str:
@@ -655,6 +754,7 @@ def _layout(request: Request, title: str, body: str, message: str | None = None)
     nav_items = [
         ("/web/dashboard", i18n.text("nav.dashboard")),
         ("/web/documents", i18n.text("nav.documents")),
+        ("/web/import", _import_text(request, "导入", "Import")),
         ("/web/review", i18n.text("nav.review")),
         ("/web/watchlist", i18n.text("nav.watchlist")),
         ("/web/ask", i18n.text("nav.ask")),
@@ -1076,6 +1176,28 @@ def _layout(request: Request, title: str, body: str, message: str | None = None)
         }}
         .ask-evidence-card h3 {{ margin: 0 0 8px; font-size: 1rem; }}
         .compact-list {{ display: grid; gap: 12px; }}
+        .review-card {{
+          display: grid;
+          gap: 10px;
+        }}
+        .review-card > .grid.cols-2 {{
+          gap: 12px;
+        }}
+        .review-history {{
+          border: 1px solid var(--line);
+          border-radius: 12px;
+          padding: 10px 12px;
+          background: #fcfaf5;
+        }}
+        .review-history summary {{
+          cursor: pointer;
+          font-weight: 600;
+        }}
+        .review-history-list {{
+          margin: 10px 0 0 18px;
+          display: grid;
+          gap: 6px;
+        }}
         .pre {{
           white-space: pre-wrap; background: #f8f4ed; border: 1px solid var(--line); border-radius: 10px; padding: 12px;
         }}
@@ -1318,6 +1440,125 @@ async def import_source(source_id: str) -> RedirectResponse:
     return _redirect("/web/sources", service.import_source(source_id))
 
 
+@router.get("/web/import")
+async def import_page(request: Request, message: str | None = None) -> HTMLResponse:
+    body = f"""
+    <div class="grid cols-2">
+      <section class="card">
+        <h2>{escape(_import_text(request, "简单手动导入内容", "Simple manual import"))}</h2>
+        <p class="muted">{escape(_import_text(request, "粘贴文本或上传 Markdown / TXT 文件，提交后立即走现有闭环入库。", "Paste text or upload a Markdown / TXT file and run the existing pipeline immediately."))}</p>
+        <form method="post" action="/web/import" enctype="multipart/form-data" class="stack">
+          <input name="title" placeholder="{escape(_import_text(request, '可选；留空时由系统自动推导', 'Optional; leave blank and the system will derive one'))}">
+          <textarea name="content_text" rows="18" placeholder="{escape(_import_text(request, '粘贴要导入的正文或 Markdown 内容', 'Paste the text or Markdown content to import'))}"></textarea>
+          <input type="file" name="content_file" accept=".md,.markdown,.txt,text/markdown,text/plain">
+          <button>{escape(_import_text(request, "立即导入", "Import now"))}</button>
+        </form>
+      </section>
+      <section class="card stack">
+        <div><strong>{escape(_import_text(request, "标题", "Title"))}</strong></div>
+        <div class="muted">{escape(_import_text(request, "可选；为空时会根据文件名或内容第一行自动生成。", "Optional; if blank, the title is derived from the filename or first non-empty line."))}</div>
+        <div><strong>{escape(_import_text(request, "正文", "Content"))}</strong></div>
+        <div class="muted">{escape(_import_text(request, "可以直接粘贴原文或 Markdown。", "You can paste raw text or Markdown directly."))}</div>
+        <div><strong>{escape(_import_text(request, "文件", "File"))}</strong></div>
+        <div class="muted">{escape(_import_text(request, "只支持 .md / .markdown / .txt 单文件上传。", "Only single-file uploads of .md / .markdown / .txt are supported."))}</div>
+        <div><strong>{escape(_import_text(request, "限制", "Limit"))}</strong></div>
+        <div class="muted">{escape(_import_text(request, "导入内容上限 1.5 MB。", "Import size is limited to 1.5 MB."))}</div>
+        <a href="/web/documents">{escape(_import_text(request, "返回文档列表", "Back to documents"))}</a>
+      </section>
+    </div>
+    """
+    return _layout(request, _import_text(request, "文档手动导入", "Manual Import"), body, message=message)
+
+
+@router.post("/web/import")
+async def import_manual_document(request: Request) -> Response:
+    submission = await _read_import_submission(request)
+    title_input = str(submission.get("title") or "")
+    content_text = str(submission.get("content_text") or "")
+    filename = str(submission.get("filename") or "").strip()
+    content_type = str(submission.get("content_type") or "").strip()
+
+    if filename:
+        suffix = _import_allowed_suffix(filename)
+        if suffix not in {".md", ".markdown", ".txt"}:
+            body = _render_manual_import_page(request, submission)
+            return _layout(
+                request,
+                _import_text(request, "文档手动导入", "Manual Import"),
+                body,
+                message=_import_text(request, "仅支持 .md、.markdown、.txt 文件。", "Only .md, .markdown, and .txt files are supported."),
+            )
+
+    content_bytes = content_text.encode("utf-8")
+    if not content_text.strip():
+        body = _render_manual_import_page(request, submission)
+        return _layout(
+            request,
+            _import_text(request, "文档手动导入", "Manual Import"),
+            body,
+            message=_import_text(request, "请输入正文，或选择一个 Markdown / TXT 文件。", "Enter content, or choose a Markdown / TXT file."),
+        )
+
+    if len(content_bytes) > 1_500_000:
+        body = _render_manual_import_page(request, submission)
+        return _layout(
+            request,
+            _import_text(request, "文档手动导入", "Manual Import"),
+            body,
+            message=_import_text(request, "导入内容超出 1.5 MB 限制。", "Import content exceeds the 1.5 MB limit."),
+        )
+
+    title = _derive_import_title(
+        explicit_title=title_input,
+        filename=filename or None,
+        content_text=content_text,
+    )
+    document_id, error = service.import_manual_document(
+        title=title,
+        content_text=content_text,
+        filename=filename or None,
+        content_type=content_type or None,
+    )
+    if document_id is not None:
+        return RedirectResponse(f"/web/documents/{document_id}", status_code=303)
+
+    body = _render_manual_import_page(request, submission)
+    return _layout(
+        request,
+        _import_text(request, "文档手动导入", "Manual Import"),
+        body,
+        message=error or _import_text(request, "文档导入失败。", "Document import failed."),
+    )
+
+
+def _render_manual_import_page(request: Request, submission: dict[str, str]) -> str:
+    return f"""
+    <div class="grid cols-2">
+      <section class="card">
+        <h2>{escape(_import_text(request, "简单手动导入内容", "Simple manual import"))}</h2>
+        <p class="muted">{escape(_import_text(request, "粘贴文本或上传 Markdown / TXT 文件，提交后立即走现有闭环入库。", "Paste text or upload a Markdown / TXT file and run the existing pipeline immediately."))}</p>
+        <form method="post" action="/web/import" enctype="multipart/form-data" class="stack">
+          <input name="title" value="{escape(str(submission.get('title') or ''))}" placeholder="{escape(_import_text(request, '可选；留空时由系统自动推导', 'Optional; leave blank and the system will derive one'))}">
+          <textarea name="content_text" rows="18" placeholder="{escape(_import_text(request, '粘贴要导入的正文或 Markdown 内容', 'Paste the text or Markdown content to import'))}">{escape(str(submission.get('content_text') or ''))}</textarea>
+          <input type="file" name="content_file" accept=".md,.markdown,.txt,text/markdown,text/plain">
+          <button>{escape(_import_text(request, "立即导入", "Import now"))}</button>
+        </form>
+      </section>
+      <section class="card stack">
+        <div><strong>{escape(_import_text(request, "标题", "Title"))}</strong></div>
+        <div class="muted">{escape(_import_text(request, "可选；为空时会根据文件名或内容第一行自动生成。", "Optional; if blank, the title is derived from the filename or first non-empty line."))}</div>
+        <div><strong>{escape(_import_text(request, "正文", "Content"))}</strong></div>
+        <div class="muted">{escape(_import_text(request, "可以直接粘贴原文或 Markdown。", "You can paste raw text or Markdown directly."))}</div>
+        <div><strong>{escape(_import_text(request, "文件", "File"))}</strong></div>
+        <div class="muted">{escape(_import_text(request, "只支持 .md / .markdown / .txt 单文件上传。", "Only single-file uploads of .md / .markdown / .txt are supported."))}</div>
+        <div><strong>{escape(_import_text(request, "限制", "Limit"))}</strong></div>
+        <div class="muted">{escape(_import_text(request, "导入内容上限 1.5 MB。", "Import size is limited to 1.5 MB."))}</div>
+        <a href="/web/documents">{escape(_import_text(request, "返回文档列表", "Back to documents"))}</a>
+      </section>
+    </div>
+    """
+
+
 @router.get("/web/documents")
 async def documents_page(
     request: Request,
@@ -1461,10 +1702,6 @@ async def review_page(request: Request, message: str | None = None) -> HTMLRespo
     risk_sections = []
     opportunity_sections = []
     for item in uncertainties:
-        history_html = "".join(
-            f"<li>{escape(edit.field_name)} -> {escape(str(edit.new_value))} <span class='muted'>{escape(str(edit.created_at))}</span></li>"
-            for edit in item.history
-        ) or _empty_list_item(_text(request, "page.review.no_history_item"))
         current_uncertainty_status = item.effective_values.get("uncertainty_status")
         uncertainty_status_options = []
         if current_uncertainty_status is None:
@@ -1478,7 +1715,7 @@ async def review_page(request: Request, message: str | None = None) -> HTMLRespo
             )
         uncertainty_sections.append(
             f"""
-            <section class="card">
+            <section class="card review-card">
               <h2>{escape(_text(request, "page.review.uncertainty"))}</h2>
               <div><strong>{escape(item.uncertainty_item)}</strong></div>
               <div class="muted">{escape(_text(request, "page.review.label.brief_id"))}: {item.brief.id}</div>
@@ -1501,23 +1738,18 @@ uncertainty_status={escape(str(item.auto_values.get("uncertainty_status") or "")
                     </form>
                   </div>
                 </div>
-                <h3>{escape(_text(request, "page.review.history"))}</h3>
-                <ul>{history_html}</ul>
+                {_render_review_history_details(request, item.history)}
               </section>
               """
         )
     for item in risks:
-        history_html = "".join(
-            f"<li>{escape(edit.field_name)} -> {escape(str(edit.new_value))} <span class='muted'>{escape(str(edit.created_at))}</span></li>"
-            for edit in item.history
-        ) or _empty_list_item(_text(request, "page.review.no_history_item"))
         severity_options = "".join(
             f"<option value='{escape(value)}'{' selected' if item.effective_values.get('severity') == value else ''}>{escape(value)}</option>"
             for value in ("high", "medium", "low")
         )
         risk_sections.append(
             f"""
-            <section class="card">
+            <section class="card review-card">
               <h2>{escape(_text(request, "page.review.risk"))}</h2>
               <div><strong>{escape(str(item.risk_item.get("title") or _text(request, "page.review.untitled_risk")))}</strong></div>
               <div class="muted">{escape(_text(request, "page.review.label.brief_id"))}: {item.brief.id}</div>
@@ -1540,17 +1772,12 @@ description={escape(str(item.auto_values.get("description") or ""))}</div>
                     </form>
                   </div>
                 </div>
-                <h3>{escape(_text(request, "page.review.history"))}</h3>
-                <ul>{history_html}</ul>
+                {_render_review_history_details(request, item.history)}
               </section>
               """
         )
     for item in opportunities:
         opportunity = item.opportunity
-        history_html = "".join(
-            f"<li>{escape(edit.field_name)} -> {escape(str(edit.new_value))} <span class='muted'>{escape(str(edit.created_at))}</span></li>"
-            for edit in item.history
-        ) or _empty_list_item(_text(request, "page.review.no_history_item"))
         status_options = "".join(
             f"<option value='{escape(value)}'{' selected' if item.effective_values.get('status') == value else ''}>{escape(value)}</option>"
             for value in ("candidate", "confirmed", "dismissed", "watching")
@@ -1564,7 +1791,7 @@ description={escape(str(item.auto_values.get("description") or ""))}</div>
         )
         opportunity_sections.append(
             f"""
-            <section class="card">
+            <section class="card review-card">
               <h2>{escape(_text(request, "page.review.opportunity"))}</h2>
               <div><strong>{escape(opportunity.title_en or opportunity.title_zh or _text(request, "page.review.untitled_opportunity"))}</strong></div>
               <div class="muted">{escape(_text(request, "page.review.label.opportunity_target_id"))}: {opportunity.id}</div>
@@ -1608,8 +1835,7 @@ total_score={escape(str(item.auto_values.get("total_score")))}
                     </form>
                   </div>
                 </div>
-                <h3>{escape(_text(request, "page.review.history"))}</h3>
-                <ul>{history_html}</ul>
+                {_render_review_history_details(request, item.history)}
               </section>
               """
         )
@@ -1617,15 +1843,11 @@ total_score={escape(str(item.auto_values.get("total_score")))}
         document = item.document
         summary = item.summary
         history = item.history
-        history_html = "".join(
-            f"<li>{escape(edit.field_name)} -> {escape(str(edit.new_value))} <span class='muted'>{escape(str(edit.created_at))}</span></li>"
-            for edit in history[:5]
-        ) or _empty_list_item(_text(request, "page.review.no_history_item"))
         auto_key_points_text = "\n".join(str(point) for point in item.auto_values.get("key_points") or [])
         effective_key_points_text = "\n".join(str(point) for point in item.effective_values.get("key_points") or [])
         sections.append(
             f"""
-            <section class="card">
+            <section class="card review-card">
               <h2>{escape(_text(request, "page.review.summary"))}</h2>
               <div><strong>{escape(document.title)}</strong></div>
               <div class="muted">{escape(_text(request, "page.review.label.summary_target_id"))}: {summary.id}</div>
@@ -1650,8 +1872,7 @@ key_points={escape(auto_key_points_text)}</div>
                     </form>
                   </div>
                 </div>
-                <h3>{escape(_text(request, "page.review.history"))}</h3>
-                <ul>{history_html}</ul>
+                {_render_review_history_details(request, history[:5])}
               </section>
               """
         )
