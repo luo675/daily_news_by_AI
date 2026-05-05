@@ -465,7 +465,7 @@ def test_documents_page_uses_document_view_contract(monkeypatch, workspace_tmp_p
     monkeypatch.setattr(
         web_routes.service,
         "list_document_views",
-        lambda query="", source_id="": (
+        lambda query="", source_id="", show_archived=False: (
             [
                 {
                     "id": str(uuid.uuid4()),
@@ -552,7 +552,7 @@ def test_documents_page_renders_english_shell_without_translating_knowledge(
     monkeypatch.setattr(
         web_routes.service,
         "list_document_views",
-        lambda query="", source_id="": (
+        lambda query="", source_id="", show_archived=False: (
             [
                 {
                     "id": document_id,
@@ -595,7 +595,7 @@ def test_documents_page_renders_english_shell_without_translating_knowledge(
 
 def test_documents_page_renders_empty_state_with_current_filters(monkeypatch, workspace_tmp_path: Path) -> None:
     source_id = str(uuid.uuid4())
-    monkeypatch.setattr(web_routes.service, "list_document_views", lambda query="", source_id="": ([], None), raising=False)
+    monkeypatch.setattr(web_routes.service, "list_document_views", lambda query="", source_id="", show_archived=False: ([], None), raising=False)
     monkeypatch.setattr(
         web_routes.service,
         "list_sources",
@@ -617,7 +617,7 @@ def test_documents_page_renders_unknown_source_filter_when_source_id_is_unmatche
     workspace_tmp_path: Path,
 ) -> None:
     source_id = str(uuid.uuid4())
-    monkeypatch.setattr(web_routes.service, "list_document_views", lambda query="", source_id="": ([], None), raising=False)
+    monkeypatch.setattr(web_routes.service, "list_document_views", lambda query="", source_id="", show_archived=False: ([], None), raising=False)
     monkeypatch.setattr(web_routes.service, "list_sources", lambda: ([], None))
 
     client = TestClient(create_app())
@@ -635,7 +635,7 @@ def test_documents_page_renders_stable_missing_field_fallbacks(monkeypatch, work
     monkeypatch.setattr(
         web_routes.service,
         "list_document_views",
-        lambda query="", source_id="": (
+        lambda query="", source_id="", show_archived=False: (
             [
                 {
                     "id": str(uuid.uuid4()),
@@ -664,7 +664,7 @@ def test_documents_page_renders_stable_missing_field_fallbacks(monkeypatch, work
 
 
 def test_documents_page_renders_empty_state_without_filters(monkeypatch, workspace_tmp_path: Path) -> None:
-    monkeypatch.setattr(web_routes.service, "list_document_views", lambda query="", source_id="": ([], None), raising=False)
+    monkeypatch.setattr(web_routes.service, "list_document_views", lambda query="", source_id="", show_archived=False: ([], None), raising=False)
     monkeypatch.setattr(web_routes.service, "list_sources", lambda: ([], None))
 
     client = TestClient(create_app())
@@ -738,6 +738,8 @@ def test_document_detail_renders_empty_entity_and_topic_states(monkeypatch, work
                 "entities": [],
                 "topics": [],
                 "content_preview": "",
+                "archived": False,
+                "archived_at": None,
             },
             None,
         ),
@@ -1234,8 +1236,8 @@ def test_system_page_uses_system_page_data_contract(monkeypatch, workspace_tmp_p
     assert "available" in response.text
     assert "configs/web/ai_settings.json" in response.text
     assert "yes" in response.text
-    assert "\u5b58\u50a8\u6982\u89c8" in response.text
-    assert "\u4e3b\u77e5\u8bc6\u5b58\u50a8" in response.text
+    assert "存储概览" in response.text
+    assert "主知识存储" in response.text
     assert "PostgreSQL + pgvector" in response.text
     assert "Ask history" in response.text
     assert "DB-first" in response.text
@@ -1245,6 +1247,106 @@ def test_system_page_uses_system_page_data_contract(monkeypatch, workspace_tmp_p
     assert "_web" in response.text
     assert "api_key" not in response.text
     assert "secret-key" not in response.text
+
+
+def test_document_detail_exposes_ask_about_this_document_entry(monkeypatch, workspace_tmp_path: Path) -> None:
+    document_id = str(uuid.uuid4())
+    monkeypatch.setattr(
+        web_routes.service,
+        "get_document_view",
+        lambda document_id_arg: (
+            {
+                "id": document_id_arg,
+                "title": "Weekly AI coding tools update",
+                "source_name": "Example Source",
+                "url": "https://example.com/doc",
+                "status": "processed",
+                "language": "en",
+                "published_at": "2026-04-27 12:00:00+00:00",
+                "summary_en": "",
+                "summary_zh": "",
+                "key_points": [],
+                "entities": [],
+                "topics": [],
+                "content_preview": "",
+            },
+            None,
+        ),
+        raising=False,
+    )
+
+    client = TestClient(create_app())
+    response_zh = client.get(f"/web/documents/{document_id}")
+    response_en = client.get(f"/web/documents/{document_id}?lang=en")
+
+    assert response_zh.status_code == 200
+    assert "基于本文提问" in response_zh.text
+    assert f"/web/ask?document_id={document_id}&amp;lang=zh" in response_zh.text
+    assert "Ask about this document" not in response_zh.text
+
+    assert response_en.status_code == 200
+    assert "Ask about this document" in response_en.text
+    assert f"/web/ask?document_id={document_id}&amp;lang=en" in response_en.text
+    assert "Archive document" in response_en.text
+
+
+def test_document_detail_exposes_restore_entry_for_archived_document(monkeypatch, workspace_tmp_path: Path) -> None:
+    document_id = str(uuid.uuid4())
+    monkeypatch.setattr(
+        web_routes.service,
+        "get_document_view",
+        lambda document_id_arg: (
+            {
+                "id": document_id_arg,
+                "title": "Weekly AI coding tools update",
+                "source_name": "Example Source",
+                "url": "https://example.com/doc",
+                "status": "processed",
+                "language": "en",
+                "published_at": "2026-04-27 12:00:00+00:00",
+                "summary_en": "",
+                "summary_zh": "",
+                "key_points": [],
+                "entities": [],
+                "topics": [],
+                "content_preview": "",
+                "archived": True,
+                "archived_at": "2026-04-30T10:00:00+00:00",
+            },
+            None,
+        ),
+        raising=False,
+    )
+
+    client = TestClient(create_app())
+    response = client.get(f"/web/documents/{document_id}?lang=en")
+
+    assert response.status_code == 200
+    assert "Archived" in response.text
+    assert "Restore document" in response.text
+    assert f"/web/documents/{document_id}/restore?lang=en" in response.text
+    assert "Archive document" not in response.text
+
+
+def test_documents_page_can_request_archived_documents(monkeypatch, workspace_tmp_path: Path) -> None:
+    captured = {"show_archived": []}
+
+    def _list_document_views(*, query="", source_id="", show_archived=False):
+        captured["show_archived"].append(show_archived)
+        if show_archived:
+            return ([], None)
+        return ([], None)
+
+    monkeypatch.setattr(web_routes.service, "list_document_views", _list_document_views, raising=False)
+    monkeypatch.setattr(web_routes.service, "list_sources", lambda: ([], None), raising=False)
+
+    client = TestClient(create_app())
+    default_response = client.get("/web/documents")
+    archived_response = client.get("/web/documents?show_archived=1")
+
+    assert default_response.status_code == 200
+    assert archived_response.status_code == 200
+    assert captured["show_archived"] == [False, True]
 
 
 def test_system_page_renders_english_storage_shell(monkeypatch, workspace_tmp_path: Path) -> None:

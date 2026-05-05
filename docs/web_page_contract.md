@@ -204,6 +204,7 @@ Documents list rendering rules:
 - `entities`
 - `topics`
 - `content_preview`
+- `needs_reprocess` optional display indicator
 
 Downgrade rules:
 
@@ -220,6 +221,40 @@ Downgrade rules:
 - missing content -> empty `content_preview`, rendered as `-`
 - DB degradation note uses the shared database-note wording when detail data is partially unavailable
 - document not found -> stable not-found card, not an exception trace
+- when `needs_reprocess` is true, the detail page shows a visible reprocessing recommendation
+- document detail actions include:
+  - `Edit document` -> `/web/documents/{document_id}/edit`
+  - `Ask about this document` -> `/web/ask?document_id={document_id}`
+  - `Archive document` / `Restore document` depending on the archived state
+  - current `lang` query is preserved when present
+- archived documents remain directly viewable and show an `Archived` indicator on the detail page
+
+## Document Edit Contract
+
+`GET /web/documents/{document_id}/edit` renders a basic edit form with:
+
+- `title`
+- `url`
+- `language`
+- `published_at`
+- `content_text`
+
+Save behavior:
+
+- invalid `document_id` -> render the edit page again with a readable error and do not 500
+- invalid `published_at` -> render the edit page again with a readable error and do not write
+- database unavailable -> render a readable error page and do not 500
+- missing document -> render the edit page again with a readable error and do not 500
+- valid submission -> save the basic fields and redirect back to `/web/documents/{document_id}`
+- `content_text` changes should set a visible reprocessing recommendation in the detail/edit UI, but should not rerun the pipeline automatically
+
+Edit contract non-goals:
+
+- no archive / soft delete
+- no source selector
+- no pipeline rerun
+- no review override change
+- no schema change
 
 ## Import Page Contract
 
@@ -237,6 +272,7 @@ Downgrade rules:
 - unsupported extension -> render the import page again with a clear error
 - oversize content -> render the import page again with a clear error
 - valid submission -> reuse the existing application pipeline and persistence, then redirect to `/web/documents/{document_id}`
+- after import, the user lands on document detail and can use the detail-page `Ask about this document` entry to enter Ask in `single_document` mode
 
 Manual import is a page-layer feature only:
 
@@ -552,6 +588,110 @@ Ask terminology:
 Current non-goal:
 
 - the page does not change retrieval logic, review override logic, provider routing, or answer generation
+
+## Ask Scope Contract
+
+The Ask page now exposes an explicit answer-scope selector while preserving the existing local retrieval first boundary.
+
+Supported scopes:
+
+- `local_db`
+  - default when no scope is selected
+  - uses the existing whole-local-knowledge behavior
+- `single_document`
+  - requires `document_id`
+  - limits evidence and context to the selected document
+
+Ask form behavior:
+
+- The form shows a scope selector.
+- `local_db` is selected by default.
+- `GET /web/ask?document_id=<id>` defaults to `single_document` when the document exists.
+- `single_document` requires a valid selected document.
+- If the user selects `single_document` without a valid document, the page returns a readable error and does not call the external provider.
+- The result page shows the selected scope and, when applicable, the selected document title / id.
+
+Single-document evidence rules:
+
+- evidence comes only from the selected document
+- reviewed summary / opportunities / risks / uncertainties are preferred when available, but only for the selected document
+- external provider prompt context is limited to selected local evidence plus bounded context from the selected document
+- the system does not expand to the whole local database when the selected document evidence is insufficient
+
+Ask history remains unchanged in storage for this work:
+
+- no new persistence fields are required
+- scope metadata may be carried transiently in the page/service result payload
+
+Current non-goals for this work:
+
+- no advanced RAG
+- no vector-query orchestration redesign
+- no provider-routing redesign
+- no AI provider storage change
+- no Review override semantics change
+- no direct external-only question mode
+
+## Document Management Contract
+
+Status: edit and archive/restore are implemented as lightweight Web workflow support; hard delete remains out of scope.
+
+This contract extends the existing Documents / Knowledge surface into a lightweight personal document-management console. It stays page-layer first and does not redesign storage.
+
+Current page/actions:
+
+- `GET /web/documents`
+  - continues to list saved documents
+  - preserves existing search/filter behavior
+  - hides archived documents by default
+  - `show_archived=1` reveals archived documents and shows an explicit note
+  - known limitation: the current lightweight implementation filters archived documents after reading a bounded recent candidate set; a future cleanup should ensure the default page returns up to 50 non-archived documents even when many recent documents are archived
+- `GET /web/documents/{document_id}`
+  - continues to show document detail
+  - exposes actions for edit, Ask about this document, archive, and restore
+  - archived documents remain directly viewable
+- edit route
+  - implemented as `GET /web/documents/{document_id}/edit` plus `POST /web/documents/{document_id}/edit`
+  - edits only basic document fields in the first version
+- archive / restore route
+  - implemented as `POST /web/documents/{document_id}/archive` and `POST /web/documents/{document_id}/restore`
+  - stores state in `Document.metadata_.web_management`
+  - does not physically hard-delete records
+  - preserves Review and Ask history rendering
+
+First-version editable fields:
+
+- title
+- URL
+- published time
+- language
+- content text
+
+Source remains display-only in the first edit pass; no selector is introduced.
+
+Document state display distinguishes:
+
+- active
+- archived
+- needs reprocess
+- failed
+
+Rules:
+
+- If `content_text` changes, existing automatic processing outputs should be treated as stale.
+- The UI should either mark the document as needing reprocessing or expose a clear reprocess action.
+- Manual review edits remain higher priority than automatic outputs.
+- Soft delete / archive is preferred over hard delete for the first version because related review edits, Ask history, entities, topics, opportunities, risks, and uncertainties may point to the document.
+- New shell copy should default to Chinese and continue preserving `?lang=en` behavior.
+
+Current non-goals:
+
+- no batch delete
+- no PDF / Word parsing
+- no multi-file management
+- no file archive system
+- no crawler or source discovery
+- no broad domain, processing, or persistence redesign unless a minimal status field requires an explicit schema change
 
 ## System / Storage Contract
 

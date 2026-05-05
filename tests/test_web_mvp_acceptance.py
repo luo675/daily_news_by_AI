@@ -68,6 +68,8 @@ def _document_detail_item(document_id: str) -> dict[str, object]:
         "entities": ["OpenAI (company)"],
         "topics": ["AI Coding"],
         "content_preview": "Preview text.",
+        "archived": False,
+        "archived_at": None,
     }
 
 
@@ -228,7 +230,7 @@ def test_web_mvp_route_level_read_smoke(monkeypatch) -> None:
     review_item = _review_summary_item()
 
     monkeypatch.setattr(web_routes.service, "get_dashboard_data", _dashboard_payload)
-    monkeypatch.setattr(web_routes.service, "list_document_views", lambda query="", source_id="": ([_document_list_item(document_id)], None))
+    monkeypatch.setattr(web_routes.service, "list_document_views", lambda query="", source_id="", show_archived=False: ([_document_list_item(document_id)], None))
     monkeypatch.setattr(web_routes.service, "get_document_view", lambda document_id_arg: (_document_detail_item(document_id_arg), None))
     monkeypatch.setattr(web_routes.service, "list_sources", lambda: ([], None))
     monkeypatch.setattr(web_routes.service, "list_source_page_views", lambda: ([_source_page_item(source_id)], None))
@@ -265,6 +267,10 @@ def test_web_mvp_route_level_read_smoke(monkeypatch) -> None:
     assert document_detail_response.status_code == 200
     assert "英文摘要：" in document_detail_response.text
     assert "OpenAI (company)" in document_detail_response.text
+    assert "编辑文章" in document_detail_response.text
+    assert "/web/ask?document_id=" in document_detail_response.text
+    assert "基于本文提问" in document_detail_response.text
+    assert "归档文章" in document_detail_response.text
 
     assert sources_response.status_code == 200
     assert "来源目录" in sources_response.text
@@ -296,7 +302,7 @@ def test_web_mvp_route_level_write_smoke(monkeypatch) -> None:
     monkeypatch.setattr(
         web_routes.service,
         "ask_question",
-        lambda question, provider_id="": {
+        lambda question, provider_id="", **kwargs: {
             "question": question,
             "answer": "Bounded answer from local evidence.",
             "answer_mode": "local_only",

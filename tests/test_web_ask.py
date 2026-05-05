@@ -75,6 +75,22 @@ def _build_document(
     return document
 
 
+def _build_second_document() -> Document:
+    document = Document(
+        id=uuid.uuid4(),
+        title="Another article about a different topic",
+        content_text="This separate document talks about unrelated product strategy and market notes.",
+        url="https://example.com/other-article",
+        created_at=datetime.now(timezone.utc),
+    )
+    document.source = Source(name="Another Source")
+    document.summary = DocumentSummary(
+        summary_en="This separate document covers unrelated material.",
+        key_points=["This separate document covers unrelated material."],
+    )
+    return document
+
+
 def _build_opportunity(document: Document) -> OpportunityAssessment:
     opportunity = OpportunityAssessment(
         id=uuid.uuid4(),
@@ -317,12 +333,189 @@ def test_ask_page_renders_history_and_local_evidence_note(monkeypatch, workspace
     assert "匹配: summary" in response.text
 
 
+def test_ask_page_defaults_to_single_document_when_document_id_is_present(
+    monkeypatch,
+    workspace_tmp_path: Path,
+) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    document_id = str(uuid.uuid4())
+    monkeypatch.setattr(web_routes.service, "list_ai_providers", lambda: [_build_provider()])
+    monkeypatch.setattr(web_routes.service, "list_qa_history", lambda: [])
+    monkeypatch.setattr(
+        web_routes.service,
+        "get_document_view",
+        lambda requested_document_id: (
+            {
+                "id": requested_document_id,
+                "title": "Target article",
+                "source_name": "Example Source",
+                "url": "https://example.com/target",
+                "status": "processed",
+                "language": "en",
+                "published_at": "2026-04-27 12:00:00+00:00",
+                "summary_en": "Summary",
+                "summary_zh": "",
+                "key_points": [],
+                "entities": [],
+                "topics": [],
+                "content_preview": "Preview",
+            },
+            None,
+        ),
+    )
+
+    client = TestClient(create_app())
+    response = client.get(f"/web/ask?document_id={document_id}")
+
+    assert response.status_code == 200
+    assert "Target article" in response.text
+    assert document_id in response.text
+    assert 'name="answer_scope"' in response.text
+    assert "option value='single_document'" in response.text
+    assert "selected" in response.text
+
+
+def test_ask_submit_rejects_single_document_without_document_id(monkeypatch, workspace_tmp_path: Path) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    called = {"count": 0}
+
+    def _should_not_be_called(*args, **kwargs):
+        called["count"] += 1
+        raise AssertionError("provider should not be called")
+
+    monkeypatch.setattr(web_routes.service, "ask_question", _should_not_be_called)
+    monkeypatch.setattr(web_routes.service, "list_ai_providers", lambda: [_build_provider()])
+    monkeypatch.setattr(web_routes.service, "list_qa_history", lambda: [])
+
+    client = TestClient(create_app())
+    response = client.post(
+        "/web/ask",
+        data={
+            "question": "What changed?",
+            "provider_id": "",
+            "answer_scope": "single_document",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "document_id" in response.text.lower() or "single document" in response.text.lower()
+    assert called["count"] == 0
+
+
+def test_ask_question_single_document_limits_evidence_and_prompt(monkeypatch, workspace_tmp_path: Path) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    service = WebMvpService()
+    provider = _build_provider()
+    target_document = _build_document(
+        title="Target article",
+        content_text=(
+            "Target article bounded context source only. "
+            "Target article bounded context source only. "
+            "The main idea is that this document should be the only source."
+        ),
+        key_points=["Target article bounded context source only."],
+        summary_en="Target article bounded context source only.",
+    )
+    other_document = _build_second_document()
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(service, "list_ai_providers", lambda: [provider])
+    monkeypatch.setattr(service, "get_document", lambda document_id: (target_document, None))
+    monkeypatch.setattr(service, "search_documents_for_question", lambda question: ([target_document, other_document], None))
+    monkeypatch.setattr(service, "search_briefs_for_question", lambda question: ([], None), raising=False)
+
+    class _FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+        def read(self):
+            return b'{"choices": [{"message": {"content": "External answer using only the target document."}}]}'
+
+    def _capture_request(req, timeout=60):
+        captured["body"] = req.data
+        captured["timeout"] = timeout
+        return _FakeResponse()
+
+    monkeypatch.setattr(web_service_module.request, "urlopen", _capture_request)
+
+    result = service.ask_question(
+        "What about target article bounded context source only?",
+        answer_scope="single_document",
+        document_id=str(target_document.id),
+    )
+
+    assert result["answer_mode"] == "local_with_external_reasoning"
+    assert result["evidence"]
+    assert all(item.get("document_id") == str(target_document.id) for item in result["evidence"] if item.get("document_id"))
+    assert "Another article about a different topic" not in json.dumps(result["evidence"], ensure_ascii=False)
+    payload = json.loads(captured["body"].decode("utf-8"))
+    user_message = payload["messages"][1]["content"]
+    assert captured["timeout"] == 60
+    assert "Target article" in user_message
+    assert "Another article about a different topic" not in user_message
+    assert "Daily Brief" not in user_message
+
+
+def test_ask_question_local_db_can_return_multiple_documents(monkeypatch, workspace_tmp_path: Path) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    service = WebMvpService()
+    provider = _build_provider()
+    target_document = _build_document(
+        title="Target article",
+        content_text="Target article content about AI coding tools, review workflows, and what changed this week. Target article content about AI coding tools, review workflows, and what changed this week.",
+        key_points=["Target article key point about AI coding tools this week."],
+        summary_en="Target article summary about AI coding tools, review workflows, and what changed this week.",
+    )
+    other_document = Document(
+        id=uuid.uuid4(),
+        title="Another article about AI coding tools",
+        content_text="Another article also discusses AI coding tools and review workflows. Another article also changed this week.",
+        url="https://example.com/another-ai-article",
+        created_at=datetime.now(timezone.utc),
+    )
+    other_document.source = Source(name="Another Source")
+    other_document.summary = DocumentSummary(
+        summary_en="Another article summary about AI coding tools, review workflows, and what changed this week.",
+        key_points=["Another article key point about AI coding tools this week."],
+    )
+
+    monkeypatch.setattr(service, "list_ai_providers", lambda: [provider])
+    monkeypatch.setattr(service, "search_documents_for_question", lambda question: ([target_document, other_document], None))
+    monkeypatch.setattr(service, "search_briefs_for_question", lambda question: ([], None), raising=False)
+    monkeypatch.setattr(service, "_call_openai_compatible", lambda *args, **kwargs: "External answer using multiple docs.")
+
+    result = service.ask_question("What changed in AI coding tools, review workflows, and this week?", answer_scope="local_db")
+
+    assert result["answer_mode"] == "local_with_external_reasoning"
+    assert len(result["evidence"]) >= 2
+    evidence_text = json.dumps(result["evidence"], ensure_ascii=False)
+    assert "Target article" in evidence_text
+    assert "Another article about AI coding tools" in evidence_text
+
+
+def test_ask_page_uses_invalid_document_id_error_without_500(monkeypatch, workspace_tmp_path: Path) -> None:
+    _configure_web_storage(monkeypatch, workspace_tmp_path)
+    monkeypatch.setattr(web_routes.service, "list_ai_providers", lambda: [_build_provider()])
+    monkeypatch.setattr(web_routes.service, "list_qa_history", lambda: [])
+    monkeypatch.setattr(web_routes.service, "get_document_view", lambda document_id: (None, "Document not found."))
+
+    client = TestClient(create_app())
+    response = client.get("/web/ask?document_id=not-a-real-id")
+
+    assert response.status_code == 200
+    assert "Document not found." in response.text
+    assert "single_document" in response.text
+
+
 def test_ask_submit_renders_answer_mode_and_note(monkeypatch, workspace_tmp_path: Path) -> None:
     _configure_web_storage(monkeypatch, workspace_tmp_path)
     monkeypatch.setattr(
         web_routes.service,
         "ask_question",
-        lambda question, provider_id="": {
+        lambda question, provider_id="", **kwargs: {
             "question": question,
             "answer": "Bounded answer from local evidence.",
             "answer_mode": "local_with_external_reasoning",
@@ -363,7 +556,7 @@ def test_ask_submit_renders_structured_result_sections_and_status(monkeypatch, w
     monkeypatch.setattr(
         web_routes.service,
         "ask_question",
-        lambda question, provider_id="": {
+        lambda question, provider_id="", **kwargs: {
             "question": question,
             "answer": "Structured answer body.",
             "answer_mode": "local_fallback",
@@ -430,7 +623,7 @@ def test_ask_submit_warning_class_uses_answer_mode_not_status_label(
     monkeypatch.setattr(
         web_routes.service,
         "ask_question",
-        lambda question, provider_id="": {
+        lambda question, provider_id="", **kwargs: {
             "question": question,
             "answer": "Fallback answer body.",
             "answer_mode": "local_fallback",
@@ -455,7 +648,7 @@ def test_ask_submit_handles_empty_and_missing_fields_without_document_links(
     monkeypatch.setattr(
         web_routes.service,
         "ask_question",
-        lambda question, provider_id="": {
+        lambda question, provider_id="", **kwargs: {
             "question": question,
             "answer": "Bounded answer from brief evidence.",
             "answer_mode": "insufficient_local_evidence",
@@ -507,7 +700,7 @@ def test_ask_submit_incomplete_class_uses_answer_mode_not_status_label(
     monkeypatch.setattr(
         web_routes.service,
         "ask_question",
-        lambda question, provider_id="": {
+        lambda question, provider_id="", **kwargs: {
             "question": question,
             "answer": "Incomplete answer body.",
             "answer_mode": "insufficient_local_evidence",
@@ -532,7 +725,7 @@ def test_ask_submit_renders_english_fallback_evidence_shell_when_lang_query_requ
     monkeypatch.setattr(
         web_routes.service,
         "ask_question",
-        lambda question, provider_id="": {
+        lambda question, provider_id="", **kwargs: {
             "question": question,
             "answer": "Bounded answer from local evidence.",
             "answer_mode": "local_only",
@@ -561,7 +754,7 @@ def test_ask_submit_renders_with_minimal_required_contract_fields(
     monkeypatch.setattr(
         web_routes.service,
         "ask_question",
-        lambda question, provider_id="": {
+        lambda question, provider_id="", **kwargs: {
             "question": question,
             "answer": "Minimal answer body.",
         },
@@ -1342,7 +1535,7 @@ def test_ask_submit_renders_brief_evidence_without_document_link(monkeypatch, wo
     monkeypatch.setattr(
         web_routes.service,
         "ask_question",
-        lambda question, provider_id="": {
+        lambda question, provider_id="", **kwargs: {
             "question": question,
             "answer": "Bounded answer from local evidence.",
             "answer_mode": "local_only",

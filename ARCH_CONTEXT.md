@@ -1875,3 +1875,274 @@ The next session should continue user-trial validation on top of the new manual 
 6. If external AI is configured, observe whether the 60-second timeout reduces fallback frequency.
 
 Do not start crawler expansion, advanced RAG, production secrets management, file-archive design, or broad schema changes before this new import flow has been exercised with real user data.
+
+## 21. Planned Next Addendum (2026-05-04 Document management and Ask scope)
+
+This addendum records the next intended product direction from `want_to_add.md`. It is a planned task, not completed implementation.
+
+### Current user request
+
+The user wants the Web MVP to support a more practical daily workflow:
+
+1. A personal management console for articles already saved in the local database.
+2. Ask / Q&A should let the user choose whether the answer is based on:
+   - the whole local knowledge database
+   - one specific saved article
+   - a newly imported external article that is first saved into the database
+3. Default assistant responses and new Web shell copy should be Chinese, while the existing English UI switch should remain available.
+
+### Stable interpretation
+
+Treat this as a small Web workflow extension on top of the stable Web MVP baseline:
+
+- Extend Documents / Knowledge into a lightweight document-management surface.
+- Extend Ask with an explicit answer scope.
+- Reuse the existing `/web/import` manual-feeding path for external article import.
+- Connect Import -> Document Detail -> Ask about this document.
+
+Do not interpret this as a request for a crawler, file-management platform, advanced RAG, source discovery, or a broad storage redesign.
+
+### Planned document-management scope
+
+The first version should let the user manage saved articles from the Web UI:
+
+- list saved articles
+- open document detail
+- edit basic document metadata:
+  - title
+  - URL
+  - source
+  - published time
+  - language
+  - content text
+- archive or soft-delete a document
+- mark documents as needing reprocessing when content text is changed, or provide a reprocess action
+- show document state clearly:
+  - active
+  - archived
+  - needs reprocess
+  - failed
+
+Prefer archive / soft delete over physical hard delete for the first version. Hard delete is risky because documents may be referenced by review edits, Ask history, entities, topics, opportunities, risks, and uncertainties.
+
+### Planned Ask answer-scope behavior
+
+Ask should support an explicit `answer_scope`:
+
+- `local_db`
+  - default mode
+  - preserves the current local retrieval first behavior
+- `single_document`
+  - requires `document_id`
+  - evidence, opportunities, risks, uncertainties, related context, and external-provider prompt context must be limited to that document
+- `import_then_ask`
+  - user imports content through the existing `/web/import` flow
+  - successful import redirects to document detail
+  - document detail exposes an "Ask about this document" entry
+  - Ask opens in `single_document` mode with the imported `document_id`
+
+Ask history should preserve scope metadata when feasible:
+
+- `answer_scope`
+- `document_id` for single-document mode
+- document title when available
+
+### Important boundaries
+
+- Keep Ask `local retrieval first`.
+- External AI may only consume the question plus selected local evidence and bounded context.
+- Do not send a raw question directly to an external provider without local evidence selection.
+- Do not use this task to redesign provider routing, AI provider storage, Review override semantics, or the main processing pipeline.
+- Do not modify `src/domain/*`, `src/application/persistence.py`, or `src/processing/*` unless implementation proves that the minimal document status / soft-delete behavior cannot be expressed without a small schema-level change.
+- Keep `/web/import` as manual feeding:
+  - no PDF / Word parsing
+  - no multi-file upload by default
+  - no file archive system
+  - no source discovery
+  - no crawler behavior
+
+### Recommended implementation order
+
+1. Add the document-management contract and minimal page actions for edit plus archive / soft delete.
+2. Add `answer_scope` to Ask page contract and service flow, preserving current full-local-db behavior as the default.
+3. Add single-document Ask filtering and result display.
+4. Connect Import and Document Detail to "Ask about this document".
+5. Add focused tests for document management, Ask scope, and import-to-Ask navigation.
+
+### Acceptance criteria for the planned task
+
+- A user can edit basic metadata for an existing saved article through Web UI.
+- A user can archive or soft-delete an article without breaking existing Review and Ask history rendering.
+- Ask defaults to the whole local database when no scope is selected.
+- Ask can be restricted to one selected document.
+- In single-document mode, displayed evidence comes only from the selected document.
+- After importing a pasted article or Markdown file, the user can enter "Ask about this document" from the document detail page.
+- New shell copy defaults to Chinese and preserves existing `?lang=en` behavior.
+
+### Documentation links
+
+- Source requirement: `want_to_add.md`
+- Page-contract planning note: `docs/web_page_contract.md`
+
+## 22. Latest Progress Addendum (2026-05-04 Ask scope status clarification)
+
+This addendum corrects the current state after the Ask scope implementation landed. It is a status note for future sessions, not a new feature plan.
+
+### Completed now
+
+- `answer_scope` for `/web/ask` is implemented.
+- `local_db` remains the default full local knowledge flow.
+- `single_document` is available for one saved article at a time.
+- `GET /web/ask?document_id=<id>` defaults into `single_document` when the document exists.
+- In `single_document` mode, evidence and external-provider prompt context are limited to the selected document.
+- The Ask result page shows the current scope and, when applicable, the selected document title / id.
+
+### Still not completed
+
+- Import -> Document Detail -> Ask about this document
+- document editing
+- archive / soft delete
+- Ask history `answer_scope` persistence schema expansion
+
+### Important boundary
+
+- Do not rewrite these items as completed unless the corresponding feature is actually implemented.
+- Do not infer document-management support from the Ask scope work alone.
+
+## 23. Latest Progress Addendum (2026-05-04 Import -> Detail -> Ask about this document)
+
+This addendum records the completion of the document-detail Ask entrypoint. It overrides the older note in addendum 22 that still listed this link as unfinished.
+
+### Completed now
+
+- `/web/import` still redirects to `/web/documents/{document_id}` after a successful import.
+- Document detail now exposes an explicit `Ask about this document` entry.
+- The new entry preserves the current language context when `lang=en` is present.
+- Clicking the detail-page Ask entry enters `/web/ask?document_id=<id>` and reuses the already implemented `single_document` Ask scope control.
+
+### Still not completed
+
+- document editing
+- archive / soft delete
+- Ask history `answer_scope` persistence schema expansion
+
+### Important boundary
+
+- Do not treat this as a document editing or archive feature.
+- Do not reopen Ask scope internals; only the page entrypoint and navigation are completed here.
+
+## 24. Latest Progress Addendum (2026-05-04 Document editing entrypoint)
+
+This addendum records the completion of the basic document editing workflow. It overrides the older notes in addenda 22 and 23 that still listed document editing as unfinished.
+
+### Completed now
+
+- Document detail now exposes an `Edit document` entry.
+- `/web/documents/{document_id}/edit` is implemented for basic metadata editing.
+- The edit form supports:
+  - `title`
+  - `url`
+  - `language`
+  - `published_at`
+  - `content_text`
+- Valid edits save and redirect back to document detail.
+- Invalid `published_at` returns the edit page with a readable error and does not write.
+- When `content_text` changes, the UI shows a reprocessing recommendation and the pipeline is not rerun automatically.
+
+### Still not completed
+
+- archive / soft delete
+- Ask history `answer_scope` persistence schema expansion
+
+### Important boundary
+
+- Do not treat this as archive / soft delete support.
+- Do not infer a new document state model from the edit workflow.
+- Do not rerun processing automatically from the edit page.
+
+## 25. Latest Progress Addendum (2026-05-04 Document archive / restore)
+
+This addendum records the completion of the lightweight archive / soft-delete workflow. It overrides the older notes in addendum 24 that still listed archive / soft delete as unfinished.
+
+### Completed now
+
+- Document detail now exposes `Archive document` for active articles and `Restore document` for archived articles.
+- `/web/documents/{document_id}/archive` and `/web/documents/{document_id}/restore` are implemented.
+- Archive state is stored in `Document.metadata_.web_management`, not in `Document.status`.
+- Default `/web/documents` hides archived articles.
+- `/web/documents?show_archived=1` reveals archived articles and shows an explicit note.
+- Archived documents remain directly viewable in detail pages.
+- Archive / restore does not physically delete documents and does not clear Review edits or Ask history.
+
+### Still not completed
+
+- hard delete
+- Ask history `answer_scope` persistence schema expansion
+
+### Important boundary
+
+- Do not rewrite archive / soft delete as unfinished unless the implementation is removed.
+- Do not treat this as a schema-based document state redesign.
+- Do not introduce hard delete as part of this workflow.
+
+## 26. Latest Progress Addendum (2026-05-05 Conversation sync and paused follow-up)
+
+This addendum records the final state of the document-management / Ask-scope work from the current conversation. It is a handoff note before git commit / push.
+
+### Completed in this conversation
+
+- Requirement source `want_to_add.md` was expanded from a short note into a structured feature description.
+- `docs/web_page_contract.md` was updated with:
+  - Ask scope behavior
+  - Document edit behavior
+  - Import -> Document Detail -> Ask about this document behavior
+  - Document archive / restore behavior
+- Ask scope was implemented:
+  - `local_db` remains the default
+  - `single_document` limits evidence and provider prompt context to one selected document
+  - `/web/ask?document_id=<id>` defaults into single-document mode when the document exists
+- Import-to-Ask workflow was implemented:
+  - `/web/import` still redirects to document detail after successful import
+  - document detail exposes `Ask about this document`
+- Document editing was implemented:
+  - detail page exposes `Edit document`
+  - edit route supports `title`, `url`, `language`, `published_at`, and `content_text`
+  - invalid `published_at`, invalid document id, missing DB session, and missing document return readable page errors instead of 500s
+  - `content_text` changes set `metadata_.web_edit.needs_reprocess` and show a reprocessing recommendation
+- Document archive / restore was implemented:
+  - detail page exposes `Archive document` for active documents and `Restore document` for archived documents
+  - archive state is stored in `Document.metadata_.web_management.archived / archived_at`
+  - default Documents list hides archived documents
+  - `/web/documents?show_archived=1` includes archived documents
+  - archive / restore does not hard-delete documents or clear related Review / Ask data
+
+### Verification recorded during the conversation
+
+- Ask scope and MVP checks:
+  - `pytest tests/test_web_ask.py tests/test_web_mvp_acceptance.py -q`
+  - result: `57 passed`
+- Import -> Detail -> Ask entrypoint checks:
+  - `pytest tests/test_web_import.py tests/test_web_dashboard_documents.py tests/test_web_ask.py tests/test_web_mvp_acceptance.py -q`
+  - result: `97 passed`
+- Document edit checks:
+  - `pytest tests/test_web_import.py tests/test_web_document_management.py tests/test_web_dashboard_documents.py tests/test_web_mvp_acceptance.py -q`
+  - result: `60 passed`
+- Document edit hardening checks:
+  - `pytest tests/test_web_import.py tests/test_web_document_management.py tests/test_web_dashboard_documents.py tests/test_web_mvp_acceptance.py -q`
+  - result: `63 passed`
+- Archive / restore checks:
+  - `pytest tests/test_web_document_management.py tests/test_web_dashboard_documents.py tests/test_web_mvp_acceptance.py -q`
+  - result: `70 passed`
+
+### Known remaining issues
+
+- The default Documents list currently reads a bounded recent candidate set and then filters archived documents in Python. If many recent documents are archived, active older documents may be hidden from the default list. A future cleanup should ensure default `/web/documents` returns up to 50 non-archived documents without being crowded out by archived recent items.
+- Ask history `answer_scope / document_id / document_title` is still not stored as first-class DB fields.
+- Archive / restore state is stored in `metadata_.web_management`; this is acceptable for the lightweight Web MVP but is not a schema-level document state model.
+- Hard delete remains unimplemented and is not a current goal.
+
+### Important boundary
+
+- Do not continue into the archive-list limit cleanup unless the user explicitly resumes development.
+- Do not add hard delete, batch delete, crawler behavior, PDF / Word parsing, advanced RAG, provider redesign, or processing pipeline reruns as part of this feature line.
+- Do not reinterpret `Document.status` as archive state.

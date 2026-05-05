@@ -439,7 +439,13 @@ class WebMvpService:
 
         return self._run_db_read(_query, empty=[])
 
-    def list_document_views(self, query: str = "", source_id: str = "") -> tuple[list[dict[str, Any]], str | None]:
+    def list_document_views(
+        self,
+        query: str = "",
+        source_id: str = "",
+        *,
+        show_archived: bool = False,
+    ) -> tuple[list[dict[str, Any]], str | None]:
         def _query(session: Session) -> list[dict[str, Any]]:
             stmt = (
                 select(Document)
@@ -464,6 +470,8 @@ class WebMvpService:
             if source_id.strip():
                 stmt = stmt.where(Document.source_id == uuid.UUID(source_id))
             documents = list(session.scalars(stmt))
+            if not show_archived:
+                documents = [document for document in documents if not self._document_is_archived(document)]
             review_service = DatabaseReviewService(session)
             opportunities_by_document = self._collect_opportunities_by_document(documents, review_service)
             return [
@@ -512,6 +520,109 @@ class WebMvpService:
             return self._build_document_detail_view(document, review_service)
 
         return self._run_db_read(_query, empty=None)
+
+    def archive_document(self, document_id: str) -> str | None:
+        return self._update_document_archive_state(document_id, archived=True)
+
+    def restore_document(self, document_id: str) -> str | None:
+        return self._update_document_archive_state(document_id, archived=False)
+
+    def get_document_edit_view(self, document_id: str) -> tuple[dict[str, Any] | None, str | None]:
+        def _query(session: Session) -> dict[str, Any] | None:
+            stmt = (
+                select(Document)
+                .options(
+                    selectinload(Document.source),
+                    selectinload(Document.summary),
+                )
+                .where(Document.id == uuid.UUID(document_id))
+            )
+            document = session.scalar(stmt)
+            if document is None:
+                return None
+            return self._build_document_edit_view(document)
+
+        return self._run_db_read(_query, empty=None)
+
+    def update_document_basic_fields(self, document_id: str, form: dict[str, str]) -> tuple[str | None, bool]:
+        try:
+            document_uuid = uuid.UUID(document_id)
+        except ValueError:
+            return "invalid_document_id", False
+
+        session = self._try_create_db_session()
+        if session is None:
+            return "database_unavailable", False
+
+        try:
+            document = session.get(Document, document_uuid)
+            if document is None:
+                return "document_not_found", False
+
+            raw_published_at = str(form.get("published_at") or "").strip()
+            if raw_published_at:
+                published_at = self._parse_datetime(raw_published_at)
+                if published_at is None:
+                    return "published_at_invalid", False
+            else:
+                published_at = None
+
+            current_title = str(document.title or "").strip()
+            new_title = str(form.get("title") or "").strip() or current_title
+            new_url = str(form.get("url") or "").strip() or None
+            new_language = str(form.get("language") or "").strip() or document.language
+            new_content_text = str(form.get("content_text") or "")
+            current_content_text = str(document.content_text or "")
+            content_changed = new_content_text != current_content_text
+
+            document.title = new_title or document.title
+            document.url = new_url
+            document.language = new_language
+            document.published_at = published_at
+            document.content_text = new_content_text
+
+            metadata = dict(document.metadata_ or {})
+            web_edit = dict(metadata.get("web_edit") or {})
+            web_edit["updated_at"] = datetime.now(timezone.utc).isoformat()
+            if content_changed:
+                web_edit["needs_reprocess"] = True
+            elif "needs_reprocess" not in web_edit:
+                web_edit["needs_reprocess"] = False
+            metadata["web_edit"] = web_edit
+            document.metadata_ = metadata
+
+            session.commit()
+            return None, content_changed
+        except Exception as exc:
+            session.rollback()
+            return f"Failed to update document: {type(exc).__name__}: {exc}", False
+        finally:
+            session.close()
+
+    def _update_document_archive_state(self, document_id: str, *, archived: bool) -> str | None:
+        try:
+            document_uuid = uuid.UUID(document_id)
+        except ValueError:
+            return "invalid_document_id"
+
+        session = self._try_create_db_session()
+        if session is None:
+            return "database_unavailable"
+
+        try:
+            document = session.get(Document, document_uuid)
+            if document is None:
+                return "document_not_found"
+
+            self._set_document_archive_state(document, archived=archived)
+            session.commit()
+            return None
+        except Exception as exc:
+            session.rollback()
+            action = "archive" if archived else "restore"
+            return f"Failed to {action} document: {type(exc).__name__}: {exc}"
+        finally:
+            session.close()
 
     def list_review_documents(self) -> tuple[list[SummaryReviewView], str | None]:
         def _query(session: Session) -> list[SummaryReviewView]:
@@ -1140,12 +1251,76 @@ class WebMvpService:
         self._write_json_records(AI_SETTINGS_PATH, providers)
         return f"Provider test status: {status}."
 
-    def ask_question(self, question: str, provider_id: str = "") -> dict[str, Any]:
+    def _normalize_answer_scope(self, raw_value: str | Any) -> str:
+        value = str(raw_value or "").strip().lower() or "local_db"
+        if value in {"local_db", "single_document"}:
+            return value
+        return "local_db"
+
+    def ask_question(
+        self,
+        question: str,
+        provider_id: str = "",
+        answer_scope: str = "local_db",
+        document_id: str = "",
+    ) -> dict[str, Any]:
         providers = self.list_ai_providers()
         provider = self._select_provider_for_task(providers, provider_id=provider_id, task="qa")
-        documents, document_error = self.search_documents_for_question(question)
-        briefs, brief_error = self.search_briefs_for_question(question)
-        db_error = self._merge_error_messages(document_error, brief_error)
+        normalized_scope = self._normalize_answer_scope(answer_scope)
+        selected_document: Document | None = None
+        documents: list[Document] = []
+        briefs: list[DailyBrief] = []
+        db_error: str | None = None
+
+        if normalized_scope == "single_document":
+            requested_document_id = str(document_id or "").strip()
+            if not requested_document_id:
+                error = "document_id is required for single_document scope."
+                answer = self._build_local_answer(question, [], error)
+                record = {
+                    "id": str(uuid.uuid4()),
+                    "question": question,
+                    "answer": answer,
+                    "answer_mode": "insufficient_local_evidence",
+                    "provider_name": None,
+                    "error": error,
+                    "note": error,
+                    "evidence": [],
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "answer_scope": normalized_scope,
+                    "document_id": None,
+                    "document_title": None,
+                }
+                self._persist_qa_history_record(record)
+                return record
+
+            selected_document, document_error = self.get_document(requested_document_id)
+            if selected_document is None:
+                error = document_error or "Document not found."
+                answer = self._build_local_answer(question, [], error)
+                record = {
+                    "id": str(uuid.uuid4()),
+                    "question": question,
+                    "answer": answer,
+                    "answer_mode": "insufficient_local_evidence",
+                    "provider_name": None,
+                    "error": error,
+                    "note": error,
+                    "evidence": [],
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "answer_scope": normalized_scope,
+                    "document_id": requested_document_id,
+                    "document_title": None,
+                }
+                self._persist_qa_history_record(record)
+                return record
+
+            documents = [selected_document]
+        else:
+            documents, document_error = self.search_documents_for_question(question)
+            briefs, brief_error = self.search_briefs_for_question(question)
+            db_error = self._merge_error_messages(document_error, brief_error)
+
         evidence = self._build_ask_evidence(
             documents[:_QA_EVIDENCE_INSPECTION_LIMIT],
             briefs[:_QA_EVIDENCE_INSPECTION_LIMIT],
@@ -1184,6 +1359,9 @@ class WebMvpService:
             "note": sufficiency_note,
             "evidence": evidence,
             "created_at": datetime.now(timezone.utc).isoformat(),
+            "answer_scope": normalized_scope,
+            "document_id": str(selected_document.id) if selected_document is not None else (str(document_id).strip() or None),
+            "document_title": selected_document.title if selected_document is not None else None,
         }
         self._persist_qa_history_record(record)
         return record
@@ -1950,6 +2128,7 @@ class WebMvpService:
             "opportunity_count": len(opportunity_items),
             "risk_count": 0,
             "uncertainty_count": self._count_uncertain_opportunities(opportunity_items, review_service),
+            "archived": self._document_is_archived(document),
         }
 
     def _build_document_detail_view(
@@ -1981,6 +2160,21 @@ class WebMvpService:
                 self._truncate_text(document.content_text or "", limit=2400),
                 default="",
             ),
+            "needs_reprocess": self._document_needs_reprocess(document),
+            "archived": self._document_is_archived(document),
+            "archived_at": self._document_archived_at(document),
+        }
+
+    def _build_document_edit_view(self, document: Document) -> dict[str, Any]:
+        return {
+            "id": str(document.id),
+            "title": self._coalesce_text(document.title, default="Untitled document"),
+            "source_name": self._coalesce_text(document.source.name if document.source else None),
+            "url": self._coalesce_text(document.url, default=""),
+            "language": self._coalesce_text(document.language),
+            "published_at": self._coalesce_text(str(document.published_at) if document.published_at else None),
+            "content_text": self._coalesce_text(document.content_text, default=""),
+            "needs_reprocess": self._document_needs_reprocess(document),
         }
 
     def _build_dashboard_recent_document_view(
@@ -2077,6 +2271,19 @@ class WebMvpService:
             return []
         effective_values = self._get_summary_effective_values(document.summary, review_service)
         return self._normalize_string_list(effective_values.get("key_points"))
+
+    def _document_needs_reprocess(self, document: Document) -> bool:
+        metadata = document.metadata_ if isinstance(document.metadata_, dict) else {}
+        web_edit = metadata.get("web_edit")
+        if not isinstance(web_edit, dict):
+            return False
+        return bool(web_edit.get("needs_reprocess"))
+
+    def _document_is_archived(self, document: Document) -> bool:
+        return bool(self._get_document_web_management_metadata(document).get("archived"))
+
+    def _document_archived_at(self, document: Document) -> str:
+        return self._coalesce_text(self._get_document_web_management_metadata(document).get("archived_at"), default="")
 
     def _count_uncertain_opportunities(
         self,
@@ -2750,6 +2957,26 @@ class WebMvpService:
         config = source.config or {}
         web_meta = config.get("_web", {})
         return dict(web_meta) if isinstance(web_meta, dict) else {}
+
+    def _get_document_web_management_metadata(self, document: Document) -> dict[str, Any]:
+        metadata = document.metadata_ if isinstance(document.metadata_, dict) else {}
+        web_management = metadata.get("web_management")
+        return dict(web_management) if isinstance(web_management, dict) else {}
+
+    def _set_document_archive_state(self, document: Document, *, archived: bool) -> None:
+        metadata = dict(document.metadata_ or {}) if isinstance(document.metadata_, dict) else {}
+        current_web_management = metadata.get("web_management")
+        preserved_web_management = {
+            str(key): value
+            for key, value in (current_web_management.items() if isinstance(current_web_management, dict) else [])
+            if key not in {"archived", "archived_at"}
+            and value is not None
+            and str(value).strip()
+        }
+        preserved_web_management["archived"] = bool(archived)
+        preserved_web_management["archived_at"] = datetime.now(timezone.utc).isoformat() if archived else None
+        metadata["web_management"] = preserved_web_management
+        document.metadata_ = metadata
 
     def _set_source_web_metadata(
         self,

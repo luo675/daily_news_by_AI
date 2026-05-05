@@ -91,6 +91,80 @@ def _ai_settings_url(request: Request, target: str) -> str:
     return f"{target}?{urlencode(_ai_settings_context_query(request))}"
 
 
+def _ask_scope_value(raw_value: object, *, document_id: str = "") -> str:
+    value = str(raw_value or "").strip().lower()
+    if value in {"local_db", "single_document"}:
+        return value
+    if str(document_id or "").strip():
+        return "single_document"
+    return "local_db"
+
+
+def _ask_scope_label(request: Request, scope: str) -> str:
+    key = "page.ask.scope.single_document" if scope == "single_document" else "page.ask.scope.local_db"
+    return _text(request, key)
+
+
+def _ask_scope_options(request: Request, selected_scope: str) -> str:
+    options = []
+    for value, key in (
+        ("local_db", "page.ask.scope.local_db"),
+        ("single_document", "page.ask.scope.single_document"),
+    ):
+        selected = " selected" if selected_scope == value else ""
+        options.append(f"<option value='{value}'{selected}>{escape(_text(request, key))}</option>")
+    return "".join(options)
+
+
+def _document_detail_ask_url(request: Request, document_id: str) -> str:
+    query = [("document_id", document_id), ("lang", _i18n(request).lang)]
+    return f"/web/ask?{urlencode(query)}"
+
+
+def _document_detail_edit_url(request: Request, document_id: str) -> str:
+    query = [("lang", _i18n(request).lang)]
+    return f"/web/documents/{document_id}/edit?{urlencode(query)}"
+
+
+def _document_detail_archive_url(request: Request, document_id: str) -> str:
+    query = [("lang", _i18n(request).lang)]
+    return f"/web/documents/{document_id}/archive?{urlencode(query)}"
+
+
+def _document_detail_restore_url(request: Request, document_id: str) -> str:
+    query = [("lang", _i18n(request).lang)]
+    return f"/web/documents/{document_id}/restore?{urlencode(query)}"
+
+
+def _ask_selected_document_block(
+    request: Request,
+    *,
+    document_view: dict[str, object] | None,
+    document_error: str | None,
+    document_id: str,
+) -> str:
+    if document_view is not None:
+        title = str(document_view.get("title") or "-").strip() or "-"
+        resolved_id = str(document_view.get("id") or document_id or "").strip() or "-"
+        return (
+            "<div class='ask-document-card'>"
+            f"<h2>{escape(_text(request, 'page.ask.selected_document'))}</h2>"
+            f"<div><strong>{escape(title)}</strong></div>"
+            f"<div class='muted'>{escape(_text(request, 'page.ask.selected_document_id'))}: {escape(resolved_id)}</div>"
+            "</div>"
+        )
+    if document_id:
+        detail = str(document_error or "").strip() or _text(request, "page.ask.document_missing")
+        return (
+            "<div class='ask-document-card'>"
+            f"<h2>{escape(_text(request, 'page.ask.selected_document'))}</h2>"
+            f"<div class='muted'>{escape(detail)}</div>"
+            f"<div class='muted'>{escape(_text(request, 'page.ask.selected_document_id'))}: {escape(document_id)}</div>"
+            "</div>"
+        )
+    return ""
+
+
 async def _read_form(request: Request) -> dict[str, str]:
     body = await request.body()
     parsed = parse_qs(body.decode("utf-8"), keep_blank_values=True)
@@ -1565,8 +1639,10 @@ async def documents_page(
     message: str | None = None,
     q: str = "",
     source_id: str = "",
+    show_archived: str | None = None,
 ) -> HTMLResponse:
-    documents, error = service.list_document_views(query=q, source_id=source_id)
+    show_archived_flag = str(show_archived or "").strip().lower() in {"1", "true", "yes", "on"}
+    documents, error = service.list_document_views(query=q, source_id=source_id, show_archived=show_archived_flag)
     sources, _ = service.list_sources()
     source_options = [f"<option value=''>{escape(_text(request, 'page.documents.source_all'))}</option>"]
     selected_source_name = _text(request, "page.documents.source_all") if not source_id.strip() else _text(request, "page.documents.source_unknown")
@@ -1589,6 +1665,9 @@ async def documents_page(
         for doc in documents
     ) or f"<div class='card muted'>{escape(empty_message)}</div>"
     error_html = _render_database_note(request, error)
+    archived_note_html = ""
+    if show_archived_flag:
+        archived_note_html = f"<div class='card'>{escape(_text(request, 'page.documents.archived_included'))}</div>"
     filters_html = f"""
       <section class="card">
         <h2>{escape(_text(request, "page.documents.filters"))}</h2>
@@ -1601,15 +1680,20 @@ async def documents_page(
     <div class="grid cols-2">
       <section class="card">
         <h2>{escape(_text(request, "page.documents.search"))}</h2>
-        <form method="get" action="/web/documents">
+        <form method="get" action="{escape(_documents_list_url(request))}">
           <input name="q" value="{escape(q)}" placeholder="{escape(_text(request, 'page.documents.placeholder.search'))}">
           <select name="source_id">{''.join(source_options)}</select>
+          <label class="inline">
+            <input type="checkbox" name="show_archived" value="1"{' checked' if show_archived_flag else ''}>
+            <span>{escape(_text(request, 'page.documents.show_archived'))}</span>
+          </label>
           <button>{escape(_text(request, "page.documents.apply"))}</button>
         </form>
       </section>
       {filters_html}
     </div>
     <div class="grid" style="margin-top:16px;">
+      {archived_note_html}
       <section class="card">
         <h2>{escape(_text(request, "page.documents.list"))}</h2>
         <div class="document-list">{rows}</div>
@@ -1630,9 +1714,23 @@ async def document_detail(request: Request, document_id: str, message: str | Non
     key_points = "<br>".join(escape(str(point)) for point in document["key_points"])
     url_value = str(document["url"]).strip()
     url_html = f"<a href=\"{escape(url_value)}\">{escape(url_value)}</a>" if url_value else "-"
+    ask_href = escape(_document_detail_ask_url(request, str(document["id"])))
+    edit_href = escape(_document_detail_edit_url(request, str(document["id"])))
+    archive_href = escape(_document_detail_archive_url(request, str(document["id"])))
+    restore_href = escape(_document_detail_restore_url(request, str(document["id"])))
     entities_block = entity_html or f"<span class='muted'>{escape(_text(request, 'page.document_detail.no_entities'))}</span>"
     topics_block = topic_html or f"<span class='muted'>{escape(_text(request, 'page.document_detail.no_topics'))}</span>"
+    reprocess_notice = ""
+    if bool(document.get("needs_reprocess")):
+        reprocess_notice = f"<div class='card'>{escape(_text(request, 'page.document_detail.reprocess_notice'))}</div>"
+    archived_notice = ""
+    archived_actions = f"<form method='post' action=\"{archive_href}\"><button type='submit'>{escape(_text(request, 'page.document_detail.archive'))}</button></form>"
+    if bool(document.get("archived")):
+        archived_notice = f"<div class='card'>{escape(_text(request, 'page.document_detail.archived'))}</div>"
+        archived_actions = f"<form method='post' action=\"{restore_href}\"><button type='submit'>{escape(_text(request, 'page.document_detail.restore'))}</button></form>"
     body = f"""
+    {reprocess_notice}
+    {archived_notice}
     <div class="grid cols-2">
       <section class="card stack">
         <div><strong>{escape(_text(request, "page.document_detail.label.title"))}:</strong> {escape(str(document['title']))}</div>
@@ -1650,6 +1748,9 @@ async def document_detail(request: Request, document_id: str, message: str | Non
         <div><strong>{escape(_text(request, "page.document_detail.topics"))}</strong><div class="chips">{topics_block}</div></div>
         <div><strong>{escape(_text(request, "page.document_detail.content_preview"))}</strong><div class="pre">{escape(str(document['content_preview'] or '-'))}</div></div>
         <div class="inline">
+          <a href="{edit_href}">{escape(_text(request, "page.document_detail.edit"))}</a>
+          <a href="{ask_href}">{escape(_text(request, "page.document_detail.ask_about_this_document"))}</a>
+          {archived_actions}
           <a href="/web/review">{escape(_text(request, "page.document_detail.go_review"))}</a>
           <a href="/web/ask">{escape(_text(request, "page.document_detail.ask"))}</a>
         </div>
@@ -1659,6 +1760,197 @@ async def document_detail(request: Request, document_id: str, message: str | Non
     if error:
         body = f"{_render_database_note(request, error)}{body}"
     return _layout(request, _text(request, "page.document_detail.title"), body, message=message)
+
+
+def _document_detail_url(request: Request, document_id: str) -> str:
+    query = [("lang", _i18n(request).lang)]
+    return f"/web/documents/{document_id}?{urlencode(query)}"
+
+
+def _documents_list_url(request: Request) -> str:
+    query = [("lang", _i18n(request).lang)]
+    return f"/web/documents?{urlencode(query)}"
+
+
+def _render_document_edit_body(
+    request: Request,
+    *,
+    document_view: dict[str, object] | None,
+    document_error: str | None,
+    values: dict[str, str] | None = None,
+) -> str:
+    if document_view is None:
+        detail = str(document_error or "").strip() or _text(request, "page.document_edit.not_found")
+        return f"<div class='card'>{escape(_text(request, 'page.document_edit.not_found'))} {escape(detail)}</div>"
+
+    edit_values = {
+        "title": str(document_view.get("title") or ""),
+        "url": str(document_view.get("url") or ""),
+        "language": str(document_view.get("language") or ""),
+        "published_at": str(document_view.get("published_at") or ""),
+        "content_text": str(document_view.get("content_text") or ""),
+    }
+    if values:
+        for key in edit_values:
+            if key in values:
+                edit_values[key] = str(values[key] or "")
+    note_html = ""
+    if bool(document_view.get("needs_reprocess")):
+        note_html = f"<div class='card'>{escape(_text(request, 'page.document_edit.reprocess_notice'))}</div>"
+    cancel_href = escape(_document_detail_url(request, str(document_view["id"])))
+    submit_href = escape(_document_detail_edit_url(request, str(document_view["id"])))
+    body = f"""
+    {note_html}
+    <div class="grid cols-2">
+      <section class="card">
+        <h2>{escape(_text(request, "page.document_edit.title"))}</h2>
+        <p class="muted">{escape(_text(request, "page.document_edit.form_intro"))}</p>
+        <form method="post" action="{submit_href}">
+          <label>
+            <span>{escape(_text(request, "page.document_edit.label.title"))}</span>
+            <input name="title" value="{escape(edit_values['title'])}" required>
+          </label>
+          <label>
+            <span>{escape(_text(request, "page.document_edit.label.url"))}</span>
+            <input name="url" value="{escape(edit_values['url'])}">
+          </label>
+          <label>
+            <span>{escape(_text(request, "page.document_edit.label.language"))}</span>
+            <input name="language" value="{escape(edit_values['language'])}">
+          </label>
+          <label>
+            <span>{escape(_text(request, "page.document_edit.label.published_at"))}</span>
+            <input name="published_at" value="{escape(edit_values['published_at'])}" placeholder="2026-04-27T12:00:00+00:00">
+          </label>
+          <label>
+            <span>{escape(_text(request, "page.document_edit.label.content_text"))}</span>
+            <textarea name="content_text" rows="18">{escape(edit_values['content_text'])}</textarea>
+          </label>
+          <div class="inline">
+            <button type="submit">{escape(_text(request, "page.document_edit.save"))}</button>
+            <a href="{cancel_href}">{escape(_text(request, "page.document_edit.cancel"))}</a>
+          </div>
+        </form>
+      </section>
+      <section class="card stack">
+        <div><strong>{escape(_text(request, "page.document_detail.label.source"))}:</strong> {escape(str(document_view['source_name']))}</div>
+        <div><strong>{escape(_text(request, "page.document_detail.label.status"))}:</strong> {escape(str(document_view.get('status') or '-'))}</div>
+        <div><strong>{escape(_text(request, "page.document_detail.label.published"))}:</strong> {escape(str(document_view.get('published_at') or '-'))}</div>
+        <div><strong>{escape(_text(request, "page.document_detail.content_preview"))}:</strong><div class="pre">{escape(edit_values['content_text'] or '-')}</div></div>
+      </section>
+    </div>
+    """
+    return body
+
+
+def _document_edit_error_message(request: Request, error_code: str | None) -> str:
+    if not error_code:
+        return _text(request, "page.document_edit.not_found")
+    normalized = str(error_code).strip()
+    if normalized == "invalid_document_id" or normalized.startswith("ValueError:"):
+        return _text(request, "page.document_edit.invalid_document_id")
+    if normalized == "database_unavailable":
+        return _text(request, "page.document_edit.database_unavailable")
+    if normalized == "document_not_found":
+        return _text(request, "page.document_edit.not_found")
+    return normalized
+
+
+def _document_management_error_message(request: Request, error_code: str | None) -> str:
+    normalized = str(error_code or "").strip()
+    if normalized == "invalid_document_id" or normalized.startswith("ValueError:"):
+        return _text(request, "page.document_management.invalid_document_id")
+    if normalized == "database_unavailable":
+        return _text(request, "page.document_management.database_unavailable")
+    if normalized == "document_not_found":
+        return _text(request, "page.document_detail.not_found")
+    if normalized:
+        return normalized
+    return _text(request, "page.document_detail.not_found")
+
+
+def _render_document_management_error_page(request: Request, document_id: str, error_code: str | None) -> HTMLResponse:
+    error_message = _document_management_error_message(request, error_code)
+    body = (
+        "<div class='card stack'>"
+        f"<div>{escape(error_message)}</div>"
+        f"<a href='{escape(_documents_list_url(request))}'>{escape(_text(request, 'page.document_management.back'))}</a>"
+        "</div>"
+    )
+    return _layout(request, _text(request, "page.document_detail.title"), body, message=error_message)
+
+
+@router.get("/web/documents/{document_id}/edit")
+async def document_edit_page(request: Request, document_id: str, message: str | None = None) -> HTMLResponse:
+    document_view, error = service.get_document_edit_view(document_id)
+    error_message = _document_edit_error_message(request, error)
+    body = _render_document_edit_body(request, document_view=document_view, document_error=error_message)
+    return _layout(request, _text(request, "page.document_edit.title"), body, message=message or error_message)
+
+
+@router.post("/web/documents/{document_id}/edit")
+async def document_edit_submit(request: Request, document_id: str) -> Response:
+    form = await _read_form(request)
+    published_at = str(form.get("published_at") or "").strip()
+    if published_at and service._parse_datetime(published_at) is None:
+        document_view, error = service.get_document_edit_view(document_id)
+        body = _render_document_edit_body(
+            request,
+            document_view=document_view,
+            document_error=error,
+            values=form,
+        )
+        return _layout(
+            request,
+            _text(request, "page.document_edit.title"),
+            body,
+            message=_text(request, "page.document_edit.invalid_published_at"),
+        )
+
+    error_code, content_changed = service.update_document_basic_fields(document_id, form)
+    if error_code:
+        if error_code in {"invalid_document_id", "database_unavailable"}:
+            body = _render_document_edit_body(
+                request,
+                document_view=None,
+                document_error=_document_edit_error_message(request, error_code),
+                values=form,
+            )
+            return _layout(
+                request,
+                _text(request, "page.document_edit.title"),
+                body,
+                message=_document_edit_error_message(request, error_code),
+            )
+
+        document_view, error = service.get_document_edit_view(document_id)
+        body = _render_document_edit_body(request, document_view=document_view, document_error=_document_edit_error_message(request, error), values=form)
+        message_key = {
+            "document_not_found": "page.document_edit.not_found",
+            "published_at_invalid": "page.document_edit.invalid_published_at",
+        }.get(error_code, error_code)
+        return _layout(request, _text(request, "page.document_edit.title"), body, message=_text(request, message_key))
+
+    detail_message = _text(request, "page.document_edit.saved")
+    if content_changed:
+        detail_message = f"{detail_message} - {_text(request, 'page.document_edit.reprocess_notice')}"
+    return _redirect(_document_detail_url(request, document_id), detail_message)
+
+
+@router.post("/web/documents/{document_id}/archive")
+async def document_archive_submit(request: Request, document_id: str) -> Response:
+    error_code = service.archive_document(document_id)
+    if error_code:
+        return _render_document_management_error_page(request, document_id, error_code)
+    return _redirect(_document_detail_url(request, document_id), _text(request, "page.document_detail.archived_message"))
+
+
+@router.post("/web/documents/{document_id}/restore")
+async def document_restore_submit(request: Request, document_id: str) -> Response:
+    error_code = service.restore_document(document_id)
+    if error_code:
+        return _render_document_management_error_page(request, document_id, error_code)
+    return _redirect(_document_detail_url(request, document_id), _text(request, "page.document_detail.restored_message"))
 
 
 @router.get("/web/review")
@@ -2001,6 +2293,16 @@ async def set_watchlist_status(item_id: str, request: Request) -> RedirectRespon
 
 @router.get("/web/ask")
 async def ask_page(request: Request, message: str | None = None) -> HTMLResponse:
+    document_id = str(request.query_params.get("document_id") or "").strip()
+    answer_scope = _ask_scope_value(request.query_params.get("answer_scope"), document_id=document_id)
+    selected_document = None
+    document_error: str | None = None
+    if document_id:
+        selected_document, document_error = service.get_document_view(document_id)
+        if selected_document is not None:
+            answer_scope = "single_document"
+        elif not document_error:
+            document_error = _text(request, "page.ask.document_missing")
     providers = [
         provider
         for provider in service.list_ai_providers()
@@ -2012,6 +2314,15 @@ async def ask_page(request: Request, message: str | None = None) -> HTMLResponse
         provider_options.append(
             f"<option value='{escape(provider.id)}'>{escape(provider.name)} - {escape(provider.model)}</option>"
         )
+    scope_options = _ask_scope_options(request, answer_scope)
+    document_block = _ask_selected_document_block(
+        request,
+        document_view=selected_document,
+        document_error=document_error,
+        document_id=document_id,
+    )
+    document_input_value = document_id if answer_scope == "single_document" else ""
+    document_input = f"<input name='document_id' value='{escape(document_input_value)}' placeholder='{escape(_text(request, 'page.ask.placeholder.document_id'))}'>"
     history_html = "".join(
         f"""
         <section class='card'>
@@ -2026,9 +2337,12 @@ async def ask_page(request: Request, message: str | None = None) -> HTMLResponse
     <div class="grid cols-2">
       <section class="card">
         <h2>{escape(_text(request, "page.ask.form_title"))}</h2>
+        {document_block}
         <form method="post" action="/web/ask">
           <textarea name="question" placeholder="{escape(_text(request, 'page.ask.placeholder.question'))}" required></textarea>
           <select name="provider_id">{''.join(provider_options)}</select>
+          <select name="answer_scope">{scope_options}</select>
+          {document_input}
           <button>{escape(_text(request, "page.ask.ask_button"))}</button>
         </form>
         <p class="muted">{escape(_text(request, "page.ask.retrieval_note"))}</p>
@@ -2036,16 +2350,84 @@ async def ask_page(request: Request, message: str | None = None) -> HTMLResponse
       <section class="stack">{history_html}</section>
     </div>
     """
-    return _layout(request, _text(request, "page.ask.title"), body, message=message)
+    return _layout(request, _text(request, "page.ask.title"), body, message=message or document_error)
 
 
 @router.post("/web/ask")
 async def ask_submit(request: Request) -> HTMLResponse:
     form = await _read_form(request)
-    result = service.ask_question(question=form.get("question", ""), provider_id=form.get("provider_id", ""))
+    answer_scope = _ask_scope_value(form.get("answer_scope"), document_id=form.get("document_id", ""))
+    document_id = str(form.get("document_id") or "").strip()
+    document_view = None
+    document_error: str | None = None
+    if answer_scope == "single_document":
+        if not document_id:
+            document_error = _text(request, "page.ask.document_missing")
+        else:
+            document_view, document_error = service.get_document_view(document_id)
+            if document_view is None and not document_error:
+                document_error = _text(request, "page.ask.document_missing")
+        if document_view is None:
+            providers = [
+                provider
+                for provider in service.list_ai_providers()
+                if provider.is_enabled and "qa" in provider.supported_tasks
+            ]
+            provider_options = [f"<option value=''>{escape(_text(request, 'page.ask.default_provider'))}</option>"]
+            for provider in providers:
+                provider_options.append(
+                    f"<option value='{escape(provider.id)}'>{escape(provider.name)} - {escape(provider.model)}</option>"
+                )
+            history = service.list_qa_history()[:10]
+            history_html = "".join(
+                f"""
+                <section class='card'>
+                  <h2>{escape(item['question'])}</h2>
+                  <div class='stack muted'>{_render_text_rows(_build_ask_metadata_rows(request, item, include_status=True))}</div>
+                  <div class='pre'>{escape(_truncate_text(item['answer'], limit=220))}</div>
+                </section>
+                """
+                for item in history
+            ) or f"<div class='card'>{escape(_text(request, 'shared.no_recent_qa'))}</div>"
+            scope_options = _ask_scope_options(request, answer_scope)
+            document_block = _ask_selected_document_block(
+                request,
+                document_view=document_view,
+                document_error=document_error,
+                document_id=document_id,
+            )
+            body = f"""
+            <div class="grid cols-2">
+              <section class="card">
+                <h2>{escape(_text(request, "page.ask.form_title"))}</h2>
+                {document_block}
+                <form method="post" action="/web/ask">
+                  <textarea name="question" placeholder="{escape(_text(request, 'page.ask.placeholder.question'))}" required>{escape(str(form.get('question') or ''))}</textarea>
+                  <select name="provider_id">{''.join(provider_options)}</select>
+                  <select name="answer_scope">{scope_options}</select>
+                  <input name="document_id" value="{escape(document_id)}" placeholder="{escape(_text(request, 'page.ask.placeholder.document_id'))}">
+                  <button>{escape(_text(request, "page.ask.ask_button"))}</button>
+                </form>
+                <p class="muted">{escape(_text(request, "page.ask.retrieval_note"))}</p>
+              </section>
+              <section class="stack">{history_html}</section>
+            </div>
+            """
+            return _layout(request, _text(request, "page.ask.title"), body, message=document_error)
+
+    result = service.ask_question(
+        question=form.get("question", ""),
+        provider_id=form.get("provider_id", ""),
+        answer_scope=answer_scope,
+        document_id=document_id,
+    )
     status_label, status_message = _build_ask_status(request, result)
     status_class = _ask_status_class(result)
     run_metadata_html = _render_text_rows(_build_ask_metadata_rows(request, result, include_status=True))
+    scope_label = _ask_scope_label(request, str(result.get("answer_scope") or answer_scope))
+    scope_detail = scope_label
+    if str(result.get("answer_scope") or answer_scope) == "single_document":
+        scope_detail = f"{scope_label}: {result.get('document_title') or document_id or '-'} ({result.get('document_id') or document_id or '-'})"
     error_html = ""
     if str(result.get("error") or "").strip():
         error_html = f"""
@@ -2068,6 +2450,10 @@ async def ask_submit(request: Request) -> HTMLResponse:
         <section class="ask-section">
           <h2>{escape(_text(request, "page.ask.answer"))}</h2>
           <div class="pre">{escape(result['answer'])}</div>
+        </section>
+        <section class="ask-section">
+          <h2>{escape(_text(request, "page.ask.scope"))}</h2>
+          <div class="pre">{escape(scope_detail)}</div>
         </section>
         <section class="ask-section">
           <h2>{escape(_text(request, "page.ask.run_details"))}</h2>
