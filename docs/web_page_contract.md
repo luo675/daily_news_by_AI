@@ -645,7 +645,7 @@ Current page/actions:
   - preserves existing search/filter behavior
   - hides archived documents by default
   - `show_archived=1` reveals archived documents and shows an explicit note
-  - known limitation: the current lightweight implementation filters archived documents after reading a bounded recent candidate set; a future cleanup should ensure the default page returns up to 50 non-archived documents even when many recent documents are archived
+  - default archived filtering is applied in the database query before the `LIMIT 50` boundary, so recent archived documents do not crowd out older active documents
 - `GET /web/documents/{document_id}`
   - continues to show document detail
   - exposes actions for edit, Ask about this document, archive, and restore

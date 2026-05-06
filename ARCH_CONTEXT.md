@@ -2146,3 +2146,72 @@ This addendum records the final state of the document-management / Ask-scope wor
 - Do not continue into the archive-list limit cleanup unless the user explicitly resumes development.
 - Do not add hard delete, batch delete, crawler behavior, PDF / Word parsing, advanced RAG, provider redesign, or processing pipeline reruns as part of this feature line.
 - Do not reinterpret `Document.status` as archive state.
+
+## 27. Latest Progress Addendum (2026-05-06 Documents archive filter and trial handoff)
+
+This addendum records the follow-up closure after the document-management / Ask-scope work. It overrides the unresolved Documents-list limitation noted in addendum 26.
+
+### Completed now
+
+- The default `/web/documents` archived filter was moved into the database query.
+- Default Documents list behavior now asks the database for non-archived documents before applying the `LIMIT 50` boundary.
+- `/web/documents?show_archived=1` still includes archived documents.
+- Archive state remains stored in `Document.metadata_.web_management.archived / archived_at`.
+- `Document.status` was not reinterpreted as archive state.
+- Review, Ask, Import, application persistence, domain models, and processing pipeline semantics were not changed.
+
+### Verification
+
+- Focused regression verification was run with:
+  - `pytest tests/test_web_document_management.py tests/test_web_dashboard_documents.py tests/test_web_mvp_acceptance.py -q`
+  - result: `71 passed`
+- The SQLAlchemy PostgreSQL JSONB expression was reviewed and compiles to a boolean check over `metadata['web_management'] ->> 'archived'`, with `false` and missing/null archive flags treated as visible in the default list.
+
+### Workflow acceptance
+
+- Browser automation for the 2026-05-06 follow-up remains blocked on this Windows machine.
+  - Chrome headless failed before page inspection with `CreateFile: 拒绝访问 (0x5)` and crash server startup failure.
+  - Do not describe this pass as browser DOM automation coverage.
+- A local Web service workflow smoke was completed instead.
+- The service-level workflow verified:
+  - Import succeeds and redirects to Document Detail.
+  - Chinese and English detail pages open.
+  - Detail exposes `Edit document` and `Ask about this document`.
+  - Edit saves and shows the reprocess recommendation when content changes.
+  - Archive hides the document from default `/web/documents`.
+  - `/web/documents?show_archived=1` shows the archived document.
+  - Restore makes the document visible again in the default list.
+  - Single-document Ask returns a result page with the target title, document id, and evidence section.
+  - `?lang=en` shell copy remains available for Documents and Ask.
+
+### Remaining issues
+
+- Ask history `answer_scope / document_id / document_title` is still not stored as first-class DB fields.
+- Archive / restore state is still a lightweight Web MVP metadata convention, not a schema-level document state model.
+- Hard delete remains unimplemented and is not a current goal.
+- Browser DOM / JS / CSS automation remains unverified for the latest follow-up because local Chrome headless is blocked.
+
+### Updated next-session starting point
+
+The document-management / Ask-scope feature line should now be treated as closed for the current MVP.
+
+Recommended next step:
+
+1. The user should start the local Web app and use it with 3-5 real AI articles or Markdown files.
+2. Exercise the real workflow:
+   - Import
+   - Document Detail
+   - Edit if needed
+   - Ask about this document
+   - Ask across local knowledge
+   - Review corrections
+   - Archive low-value documents
+3. Capture feedback with:
+   - page
+   - reproduction steps
+   - expected result
+   - actual result
+   - severity
+4. Only after real feedback is collected should the next implementation task be selected.
+
+Do not start hard delete, batch delete, PDF / Word parsing, multi-file upload, source discovery, crawler expansion, advanced RAG, provider redesign, broad schema changes, or processing pipeline auto-reruns before the next real user feedback round.

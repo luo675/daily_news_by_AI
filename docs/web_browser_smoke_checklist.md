@@ -12,6 +12,20 @@ Result summary:
 - Confirmed AI Settings list and edit pages only exposed masked keys, not plaintext `api_key` values.
 - Watchlist was in empty-state mode during smoke; the create form rendered and the page remained navigable.
 
+Latest follow-up note:
+
+- Browser automation for the current 2026-05-06 local follow-up run was blocked in Chrome headless by `CreateFile: 拒绝访问 (0x5)` and crash server startup failure.
+- The current follow-up run still verified the workflow through the local Web service layer, but not through a browser DOM automation pass.
+- The verified workflow in that follow-up run covered:
+  - Import
+  - Detail
+  - Edit
+  - Archive / Restore
+  - Documents archived filter
+  - single-document Ask
+  - `?lang=en` shell copy
+- Remaining risk: the real browser DOM / JS / CSS rendering layer was not covered by that follow-up run.
+
 Scope:
 
 - `/web/dashboard`

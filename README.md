@@ -281,6 +281,28 @@ What this means in practice:
 
 For the latest handoff status and the most reasonable next-session starting point, always prefer [ARCH_CONTEXT.md](./ARCH_CONTEXT.md).
 
+## Latest Status Update (2026-05-06 Documents Archive Filter / Trial Handoff)
+
+This section supplements the document-management and Ask-scope work.
+
+- `/web/documents` now applies the default archived-document filter in the database query before the `LIMIT 50` boundary.
+- Recent archived documents should no longer crowd out older active documents from the default Documents list.
+- `/web/documents?show_archived=1` still shows archived documents.
+- Archive state remains a lightweight Web MVP convention under `Document.metadata_.web_management`, not `Document.status`.
+- Focused verification passed:
+  - `pytest tests/test_web_document_management.py tests/test_web_dashboard_documents.py tests/test_web_mvp_acceptance.py -q`
+  - result: `71 passed`
+- Chrome headless browser automation for the latest follow-up remains blocked on this Windows machine by `CreateFile: 拒绝访问 (0x5)` and crash server startup failure.
+- A local Web service workflow smoke passed instead, covering Import, Detail, Edit, Archive / Restore, Documents archived filter, single-document Ask, and `?lang=en` shell copy.
+
+What this means in practice:
+
+- Treat the document-management / Ask-scope feature line as closed for the current MVP.
+- The next step should be real local usage with a few real articles, then bug or usability fixes from observed feedback.
+- Do not start hard delete, batch delete, PDF / Word parsing, multi-file upload, crawler/source-discovery work, advanced RAG, provider redesign, broad schema changes, or processing pipeline auto-reruns before the next feedback round.
+
+For the latest handoff status and the most reasonable next-session starting point, always prefer [ARCH_CONTEXT.md](./ARCH_CONTEXT.md).
+
 ## Latest Status Update (2026-04-29)
 
 This section supplements the older update above.

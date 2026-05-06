@@ -118,6 +118,37 @@ Browser-engine note:
 - On this machine, Edge headless did not yield a usable DOM dump for those pages and emitted crashpad/profile errors instead.
 - So the follow-up trial is verified at the HTTP/application level, but a full browser DOM inspection is still blocked by the local Edge environment.
 
+## Latest Verification Addendum (2026-05-06)
+
+This addendum records the current follow-up verification for the document-management / Ask-scope work.
+
+### Browser automation
+
+- Blocked.
+- Chrome headless on this machine failed before page inspection with:
+  - `CreateFile: 拒绝访问 (0x5)`
+  - crash server startup failure
+- Because of that, no reliable browser DOM dump or JS/CSS-level inspection was obtained for this follow-up pass.
+
+### Server-side workflow smoke
+
+- Passed.
+- A local Web service was started and the workflow was exercised directly through HTTP requests.
+- Verified flow:
+  - Import
+  - Detail
+  - Edit
+  - Archive / Restore
+  - Documents archived filter
+  - single-document Ask
+  - `?lang=en` shell copy
+
+### Remaining risk
+
+- The browser automation layer remains unverified for this follow-up pass.
+- DOM rendering, JS behavior, and CSS/layout behavior were not covered by the blocked Chrome headless run.
+- The current evidence therefore confirms the Web service workflow, not a full browser automation pass.
+
 ## Passed Items
 
 - Real batch import with 5 URLs

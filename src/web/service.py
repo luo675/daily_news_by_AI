@@ -469,9 +469,10 @@ class WebMvpService:
                 )
             if source_id.strip():
                 stmt = stmt.where(Document.source_id == uuid.UUID(source_id))
-            documents = list(session.scalars(stmt))
             if not show_archived:
-                documents = [document for document in documents if not self._document_is_archived(document)]
+                archived_flag = Document.metadata_["web_management"]["archived"].as_boolean()
+                stmt = stmt.where(or_(archived_flag.is_(False), archived_flag.is_(None)))
+            documents = list(session.scalars(stmt))
             review_service = DatabaseReviewService(session)
             opportunities_by_document = self._collect_opportunities_by_document(documents, review_service)
             return [

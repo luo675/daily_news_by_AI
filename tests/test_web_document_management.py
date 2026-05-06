@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import shutil
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -676,20 +676,23 @@ def test_list_document_views_hides_archived_documents_by_default(monkeypatch) ->
     class _Session:
         def __init__(self):
             self.closed = False
-            self.calls = 0
 
         def scalars(self, stmt):
-            if self.calls == 0:
-                self.calls += 1
-                return [active_document, archived_document]
-            self.calls += 1
-            return []
+            sql = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+            if "archived" in sql:
+                return [active_document]
+            return [active_document, archived_document]
 
         def close(self):
             self.closed = True
 
     sessions = [_Session(), _Session()]
     monkeypatch.setattr(service, "_try_create_db_session", lambda: sessions.pop(0))
+    monkeypatch.setattr(
+        service,
+        "_collect_opportunities_by_document",
+        lambda documents, review_service: {document.id: [] for document in documents},
+    )
 
     class _FakeDatabaseReviewService:
         def __init__(self, session):
@@ -708,3 +711,80 @@ def test_list_document_views_hides_archived_documents_by_default(monkeypatch) ->
     assert [view["title"] for view in views_default] == ["Active article"]
     assert [view["title"] for view in views_archived] == ["Active article", "Archived article"]
     assert views_archived[1]["archived"] is True
+
+
+def test_list_document_views_keeps_older_active_documents_when_recent_archived_docs_fill_limit(
+    monkeypatch,
+) -> None:
+    service = WebMvpService()
+    source = Source(id=uuid.uuid4(), name="Example Source")
+    recent_anchor = datetime(2026, 4, 30, 12, 0, tzinfo=timezone.utc)
+
+    def _document(title: str, *, archived: bool, created_at: datetime) -> Document:
+        return Document(
+            id=uuid.uuid4(),
+            title=title,
+            url=f"https://example.com/{title.replace(' ', '-').lower()}",
+            language="en",
+            published_at=created_at,
+            created_at=created_at,
+            content_text=f"Content for {title}.",
+            status="processed",
+            metadata_={
+                "web_management": {
+                    "archived": archived,
+                    "archived_at": created_at.isoformat() if archived else None,
+                }
+            },
+        )
+
+    documents = [
+        _document(
+            f"Archived article {index + 1}",
+            archived=True,
+            created_at=recent_anchor - timedelta(minutes=index),
+        )
+        for index in range(50)
+    ]
+    documents.append(
+        _document(
+            "Older active article",
+            archived=False,
+            created_at=recent_anchor - timedelta(days=1),
+        )
+    )
+    for document in documents:
+        document.source = source
+
+    class _Session:
+        def __init__(self):
+            self.closed = False
+
+        def scalars(self, stmt):
+            sql = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+            filtered_documents = documents
+            if "archived" in sql:
+                filtered_documents = [
+                    document for document in documents if not document.metadata_["web_management"]["archived"]
+                ]
+            return filtered_documents[:50]
+
+        def close(self):
+            self.closed = True
+
+    sessions = [_Session(), _Session()]
+    monkeypatch.setattr(service, "_try_create_db_session", lambda: sessions.pop(0))
+    monkeypatch.setattr(
+        service,
+        "_collect_opportunities_by_document",
+        lambda docs, review_service: {document.id: [] for document in docs},
+    )
+
+    views_default, error_default = service.list_document_views()
+    views_archived, error_archived = service.list_document_views(show_archived=True)
+
+    assert error_default is None
+    assert error_archived is None
+    assert [view["title"] for view in views_default] == ["Older active article"]
+    assert len(views_archived) == 50
+    assert views_archived[0]["archived"] is True
